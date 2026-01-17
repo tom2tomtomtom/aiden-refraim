@@ -3,11 +3,13 @@ export interface Video {
   user_id: string;
   original_url: string;
   processed_url: string | null;
-  status: 'pending' | 'UPLOADED' | 'PROCESSING' | 'COMPLETE' | 'ERROR';
+  status: 'pending' | 'processing' | 'completed' | 'failed';
   error: string | null;
   platforms: string[];
   title: string | null;
   description: string | null;
+  platform_outputs: PlatformOutputs | null;
+  processing_metadata: ProcessingMetadata | null;
   created_at: string;
   updated_at: string;
 }
@@ -17,7 +19,7 @@ export interface ProcessingJob {
   created_at: string;
   updated_at: string;
   video_id: string;
-  status: 'PENDING' | 'RUNNING' | 'COMPLETE' | 'ERROR';
+  status: 'pending' | 'processing' | 'completed' | 'failed';
   progress: number;
   error: string | null;
   platforms: string[];

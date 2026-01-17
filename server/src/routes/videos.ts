@@ -129,7 +129,10 @@ router.post('/upload', requireAuth, upload.single('video'), async (req: MulterRe
         });
       }
       // Validate platform values
-      const validPlatforms = ['youtube', 'instagram', 'tiktok'];
+      const validPlatforms = [
+        'instagram-story', 'instagram-feed-square', 'instagram-feed-portrait',
+        'facebook-story', 'facebook-feed', 'tiktok', 'youtube-main', 'youtube-shorts'
+      ];
       for (const platform of platformsArray) {
         if (!validPlatforms.includes(platform)) {
           return res.status(400).json({

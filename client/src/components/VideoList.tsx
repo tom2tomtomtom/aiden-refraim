@@ -30,14 +30,14 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
       setError(null);
 
       // If any videos are processing, poll for updates
-      const hasProcessingVideos = fetchedVideos.some(v => v.status === 'PROCESSING');
+      const hasProcessingVideos = fetchedVideos.some(v => v.status === 'processing');
       if (hasProcessingVideos) {
         const pollInterval = setInterval(async () => {
           const updatedVideos = await api.getUserVideos();
           setVideos(updatedVideos);
           
           // Stop polling if no videos are processing
-          if (!updatedVideos.some(v => v.status === 'PROCESSING')) {
+          if (!updatedVideos.some(v => v.status === 'processing')) {
             clearInterval(pollInterval);
           }
         }, 5000); // Poll every 5 seconds
@@ -123,16 +123,16 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
 
             <div className="flex items-center justify-between mt-4">
               <div className="text-sm">
-                {video.status === 'COMPLETE' ? (
+                {video.status === 'completed' ? (
                   <span className="text-green-500">✓ Processed</span>
-                ) : video.status === 'PROCESSING' ? (
+                ) : video.status === 'processing' ? (
                   <div className="flex items-center space-x-2">
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500" />
                     <span className="text-blue-500">
                       Processing {video.processing_jobs?.[0]?.progress || 0}%
                     </span>
                   </div>
-                ) : video.status === 'ERROR' ? (
+                ) : video.status === 'failed' ? (
                   <span className="text-red-500" title={video.processing_jobs?.[0]?.error || 'Processing failed'}>
                     Failed
                   </span>
@@ -144,7 +144,7 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
               <div className="flex space-x-2">
                 <button
                   onClick={() => onProcessVideo(video)}
-                  disabled={video.status === 'PROCESSING'}
+                  disabled={video.status === 'processing'}
                   className="p-2 text-gray-600 hover:text-blue-500 rounded-full hover:bg-blue-50"
                   title="Process Video"
                 >

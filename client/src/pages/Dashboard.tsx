@@ -5,16 +5,7 @@ import { ProcessingDialog } from '../components/ProcessingDialog';
 import { Toast } from '../components/Toast';
 import { ApiClient } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
-
-interface Video {
-  id: string;
-  title: string | null;
-  description: string | null;
-  original_url: string;
-  status: string;
-  platform_outputs: Record<string, any> | null;
-  created_at: string;
-}
+import { Video } from '../api';
 
 export function Dashboard() {
   const { user } = useAuth();
@@ -38,7 +29,7 @@ export function Dashboard() {
     setToast({ open: true, title, description, type });
   };
 
-  const handleUploadComplete = (videoId: string) => {
+  const handleUploadComplete = (_videoId: string) => {
     showToast(
       'Video uploaded successfully',
       'Your video is ready for processing',

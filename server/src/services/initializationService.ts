@@ -56,50 +56,5 @@ export class InitializationService {
       console.error('Error initializing database:', error);
       throw error;
     }
-    try {
-      // Enable UUID extension
-      const { error: extensionError } = await supabase.rpc('create_extension', {
-        name: 'uuid-ossp'
-      });
-
-      if (extensionError) {
-        console.warn('UUID extension might already be enabled:', extensionError);
-      }
-
-      // Check if videos table exists
-      const { error: existsError } = await supabase
-        .from('videos')
-        .select('id')
-        .limit(1);
-
-      if (existsError?.message?.includes('relation "videos" does not exist')) {
-        // Create videos table using schema.sql
-        const schemaPath = path.join(__dirname, '../config/schema.sql');
-        const schemaSql = fs.readFileSync(schemaPath, 'utf8');
-        
-        const { error: createError } = await supabase.query(schemaSql);
-
-        // Add RLS policies
-        const { error: rlsError } = await supabase.query(`
-          ALTER TABLE videos ENABLE ROW LEVEL SECURITY;
-
-          CREATE POLICY "Users can only access their own videos"
-            ON videos
-            FOR ALL
-            USING (auth.uid() = user_id);
-        `);
-
-        if (createError) {
-          throw createError;
-        }
-
-        console.log('Videos table created successfully');
-      } else {
-        console.log('Videos table already exists');
-      }
-    } catch (error) {
-      console.error('Error initializing database:', error);
-      throw error;
-    }
   }
 }

@@ -138,7 +138,7 @@ class BasicVideoProcessor implements VideoProcessor {
               bitrate: format.bitrate,
               metadata: analysisResult.metadata
             },
-            analysisResult.focusRegion
+            analysisResult.focusRegion || { x: 0, y: 0, width: 1, height: 1 }
           );
 
           platformOutputs[platform] = {

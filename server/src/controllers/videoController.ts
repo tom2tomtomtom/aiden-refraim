@@ -62,7 +62,7 @@ export const uploadVideo = async (req: Request, res: Response) => {
     console.log('Creating database record...');
     const video = await DatabaseService.createVideo({
       original_url: videoUrl,
-      status: 'UPLOADED',
+      status: 'pending',
       user_id: user.id,
       platforms,
       ...(req.body.title && { title: req.body.title }),
@@ -186,7 +186,7 @@ export const processVideo = async (req: Request, res: Response) => {
     const processingJob = await DatabaseService.createProcessingJob({
       video_id: id,
       platforms,
-      status: 'PENDING',
+      status: 'pending',
       progress: 0,
       user_id: user.id
     });
