@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Navigate } from 'react-router-dom';
+import { supabase } from '../lib/supabase';
 
 export function Login() {
   const { user, signIn, signUp } = useAuth();
@@ -9,10 +10,30 @@ export function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
 
   if (user) {
     return <Navigate to="/" replace />;
   }
+
+  const handleForgotPassword = async () => {
+    if (!email) {
+      setError('Enter your email address first');
+      return;
+    }
+    setResetLoading(true);
+    setError(null);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email);
+      if (error) throw error;
+      setResetSent(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send reset email');
+    } finally {
+      setResetLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,26 +56,29 @@ export function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="max-w-md w-full space-y-8 p-8 bg-white rounded-lg shadow">
+    <div className="min-h-screen flex items-center justify-center bg-black-ink">
+      <div className="max-w-md w-full space-y-8 p-8 bg-black-card border-2 border-border-subtle">
         <div>
-          <h1 className="text-center text-4xl font-extrabold text-gray-900 mb-2">REFRAIM</h1>
-          <h2 className="text-center text-2xl font-medium text-gray-600">
+          <h1 className="text-center text-4xl font-bold text-red-hot uppercase tracking-tight mb-2">
+            AIDEN // REFRAIM
+          </h1>
+          <p className="text-center text-sm text-white-dim uppercase tracking-wide">
             {isSignUp ? 'Create an account' : 'Sign in to your account'}
-          </h2>
+          </p>
         </div>
 
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
           {error && (
-            <div className="rounded-md bg-red-50 p-4">
-              <div className="text-sm text-red-700">{error}</div>
+            <div className="p-3 bg-black-deep border-2 border-red-hot">
+              <p className="text-xs text-red-hot font-bold uppercase">Error</p>
+              <p className="text-sm text-white-muted mt-1">{error}</p>
             </div>
           )}
 
-          <div className="rounded-md shadow-sm -space-y-px">
+          <div className="space-y-3">
             <div>
-              <label htmlFor="email-address" className="sr-only">
-                Email address
+              <label htmlFor="email-address" className="block text-xs font-bold text-white-dim uppercase tracking-wide mb-1">
+                Email
               </label>
               <input
                 id="email-address"
@@ -64,12 +88,12 @@ export function Login() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
-                placeholder="Email address"
+                className="w-full bg-black-deep border border-border-subtle text-white-full px-4 py-3 text-sm focus:border-red-hot focus:bg-black-ink transition-all"
+                placeholder="you@example.com"
               />
             </div>
             <div>
-              <label htmlFor="password" className="sr-only">
+              <label htmlFor="password" className="block text-xs font-bold text-white-dim uppercase tracking-wide mb-1">
                 Password
               </label>
               <input
@@ -80,9 +104,25 @@ export function Login() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                className="w-full bg-black-deep border border-border-subtle text-white-full px-4 py-3 text-sm focus:border-red-hot focus:bg-black-ink transition-all"
                 placeholder="Password"
               />
+              {isSignUp && (
+                <p className="text-xs text-white-dim mt-1">Minimum 6 characters</p>
+              )}
+              {!isSignUp && (
+                <button
+                  type="button"
+                  onClick={handleForgotPassword}
+                  disabled={resetLoading}
+                  className="text-xs text-white-dim hover:text-orange-accent transition-colors mt-1 disabled:opacity-50"
+                >
+                  {resetLoading ? 'Sending...' : 'Forgot password?'}
+                </button>
+              )}
+              {resetSent && (
+                <p className="text-xs text-orange-accent mt-1">Reset link sent. Check your email.</p>
+              )}
             </div>
           </div>
 
@@ -90,23 +130,23 @@ export function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              className="w-full bg-red-hot text-white px-6 py-3 text-sm font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? (
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" />
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mx-auto" />
               ) : isSignUp ? (
-                'Sign up'
+                'Sign Up'
               ) : (
-                'Sign in'
+                'Sign In'
               )}
             </button>
           </div>
 
-          <div className="text-sm text-center">
+          <div className="text-center">
             <button
               type="button"
               onClick={() => setIsSignUp(!isSignUp)}
-              className="font-medium text-blue-600 hover:text-blue-500"
+              className="text-xs text-white-dim uppercase tracking-wide hover:text-orange-accent transition-colors"
             >
               {isSignUp
                 ? 'Already have an account? Sign in'

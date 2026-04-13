@@ -1,9 +1,10 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { VideoUpload } from '../components/VideoUpload';
 import { VideoList } from '../components/VideoList';
 import { ProcessingDialog } from '../components/ProcessingDialog';
 import { Toast } from '../components/Toast';
-import { ApiClient } from '../lib/api';
+import { useApi } from '../contexts/ApiContext';
 import { useAuth } from '../contexts/AuthContext';
 
 interface Video {
@@ -18,6 +19,8 @@ interface Video {
 
 export function Dashboard() {
   const { user } = useAuth();
+  const { api } = useApi();
+  const navigate = useNavigate();
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
   const [processingDialogOpen, setProcessingDialogOpen] = useState(false);
   const [toast, setToast] = useState<{
@@ -41,11 +44,10 @@ export function Dashboard() {
   const handleUploadComplete = (videoId: string) => {
     showToast(
       'Video uploaded successfully',
-      'Your video is ready for processing',
+      'Navigating to editor...',
       'success'
     );
-    // Trigger a refresh of the video list
-    // You might want to implement this using React Query or similar
+    navigate(`/editor/${videoId}`);
   };
 
   const handleUploadError = (error: Error) => {
@@ -61,7 +63,8 @@ export function Dashboard() {
     if (!selectedVideo) return;
 
     try {
-      await ApiClient.processVideo(selectedVideo.id, { platforms: formats });
+      if (!api) return;
+      await api.processVideo(selectedVideo.id, { platforms: formats });
       showToast(
         'Processing started',
         'You will be notified when processing is complete',
@@ -80,9 +83,9 @@ export function Dashboard() {
     if (!confirm('Are you sure you want to delete this video?')) return;
 
     try {
-      await ApiClient.deleteVideo(video.id);
+      if (!api) return;
+      await api.deleteVideo(video.id);
       showToast('Video deleted', undefined, 'success');
-      // Trigger a refresh of the video list
     } catch (error) {
       showToast('Delete failed', 'Failed to delete video', 'error');
     }
@@ -90,10 +93,10 @@ export function Dashboard() {
 
   if (!user) {
     return (
-      <div className="flex items-center justify-center h-screen">
+      <div className="flex items-center justify-center h-screen bg-black-deep">
         <div className="text-center">
-          <h1 className="text-2xl font-bold mb-4">Please sign in</h1>
-          <p className="text-gray-600">
+          <h1 className="text-2xl font-bold mb-4 text-white-full">Please sign in</h1>
+          <p className="text-white-dim">
             You need to be signed in to access this page
           </p>
         </div>
@@ -104,14 +107,14 @@ export function Dashboard() {
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold mb-2">REFRAIM</h1>
-        <p className="text-gray-600">
+        <h1 className="text-2xl font-bold mb-2 text-white-full">REFRAIM</h1>
+        <p className="text-white-dim">
           AI-powered video processing for social media
         </p>
       </div>
 
       <div className="mb-12">
-        <h2 className="text-xl font-semibold mb-4">Upload New Video</h2>
+        <h2 className="text-xl font-semibold mb-4 text-white-muted">Upload New Video</h2>
         <VideoUpload
           onUploadComplete={handleUploadComplete}
           onError={handleUploadError}
@@ -119,19 +122,13 @@ export function Dashboard() {
       </div>
 
       <div>
-        <h2 className="text-xl font-semibold mb-4">Your Videos</h2>
+        <h2 className="text-xl font-semibold mb-4 text-white-muted">Your Videos</h2>
         <VideoList
-          onVideoSelect={() => {}}
+          onVideoSelect={(video) => navigate(`/editor/${video.id}`)}
           onProcessVideo={handleProcessVideo}
           onDeleteVideo={handleDeleteVideo}
         />
       </div>
-
-      <ProcessingDialog
-        open={processingDialogOpen}
-        onOpenChange={setProcessingDialogOpen}
-        onProcess={handleStartProcessing}
-      />
 
       <Toast
         open={toast.open}

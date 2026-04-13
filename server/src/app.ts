@@ -2,18 +2,43 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import { json, urlencoded } from 'body-parser';
+import rateLimit from 'express-rate-limit';
 import testRoutes from './routes/test';
-import videoRoutes from './routes/videos';
+import videoRoutes from './routes/videoRoutes';
 import adminRoutes from './routes/admin';
+import focusPointRoutes from './routes/focusPointRoutes';
+import scanRoutes from './routes/scanRoutes';
+import billingRoutes from './routes/billingRoutes';
+import webhookRoutes from './routes/webhookRoutes';
 
 const app = express();
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later' },
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20, // stricter for auth
+  message: { error: 'Too many auth attempts' },
+});
 
 // Middleware
 app.use(morgan('dev'));
 
 // CORS configuration
 app.use(cors({
-  origin: process.env.NODE_ENV === 'development' ? 'http://localhost:5173' : process.env.CLIENT_URL,
+  origin: [
+    'http://localhost:5173',
+    'http://localhost:5180',
+    'https://refraim-app.netlify.app',
+    'https://refraim.aiden.services',
+    process.env.CLIENT_URL || '',
+  ].filter(Boolean),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -34,9 +59,12 @@ app.use((req, res, next) => {
   next();
 });
 
+// Webhook routes (must be before json body parser for raw body access)
+app.use('/api/webhooks', webhookRoutes);
+
 // Body parsing middleware with increased limits
-app.use(json({ limit: '500mb' }));
-app.use(urlencoded({ extended: true, limit: '500mb' }));
+app.use(json({ limit: '5mb' }));
+app.use(urlencoded({ extended: true, limit: '5mb' }));
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -56,10 +84,22 @@ app.use((req, res, next) => {
   next();
 });
 
+// Health check (no auth required)
+app.get('/api/health', (_req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: Date.now() });
+});
+
+// Rate limiting
+app.use('/api', apiLimiter);
+app.use('/api/billing/checkout', authLimiter);
+
 // Routes
 app.use('/api/test', testRoutes);
 app.use('/api/videos', videoRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/videos', focusPointRoutes);
+app.use('/api/videos', scanRoutes);
+app.use('/api/billing', billingRoutes);
 
 // Error handling with detailed logging
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

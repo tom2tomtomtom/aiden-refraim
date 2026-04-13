@@ -46,27 +46,41 @@ export const analyzeVideo = async (videoUrl: string): Promise<AnalysisResult> =>
   await StorageService.downloadVideo(videoUrl, tempPath);
 
   try {
-    // Run scene detection and motion analysis in parallel
-    const [scenes, motionData, metadata] = await Promise.all([
-      detectScenes(tempPath),
-      analyzeMotion(tempPath),
-      getVideoMetadata(tempPath),
-    ]);
+    // Get metadata first (most reliable)
+    const metadata = await getVideoMetadata(tempPath);
 
-    // Calculate focus region based on motion data
-    const focusRegion = calculateFocusRegion(motionData);
+    // Run scene detection and motion analysis with graceful fallbacks
+    let scenes: SceneData[] = [];
+    let motionData: MotionData[] = [];
+
+    try {
+      scenes = await detectScenes(tempPath);
+    } catch (err) {
+      console.warn('Scene detection failed, using empty scenes:', err);
+    }
+
+    try {
+      motionData = await analyzeMotion(tempPath);
+    } catch (err) {
+      console.warn('Motion analysis failed, using center focus:', err);
+    }
+
+    // Calculate focus region based on motion data (or default to center)
+    const focusRegion = motionData.length > 0
+      ? calculateFocusRegion(motionData)
+      : { x: 0, y: 0, width: metadata.resolution.width, height: metadata.resolution.height };
 
     return {
       focusRegion,
       scenes,
       motionData,
       metadata,
-      keypoints: [], // Will be added in phase 3 with OpenPose
-      saliencyMap: new Uint8Array(), // Will be added in phase 3
+      keypoints: [],
+      saliencyMap: new Uint8Array(),
     };
   } finally {
     // Clean up temp file
-    await StorageService.deleteFile(tempPath);
+    try { await StorageService.deleteFile(tempPath); } catch { /* ignore */ }
   }
 };
 

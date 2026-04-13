@@ -1,12 +1,14 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { 
+import { requireAuth } from '../middleware/auth';
+import {
   uploadVideo,
   getVideoById,
   getVideoStatus,
   processVideo,
   getUserVideos,
-  deleteVideo
+  deleteVideo,
+  getVideoOutput
 } from '../controllers/videoController';
 
 const router = Router();
@@ -24,6 +26,9 @@ const upload = multer({
   }
 });
 
+// All routes require auth
+router.use(requireAuth as any);
+
 // Video management routes
 router.post('/upload', upload.single('video'), uploadVideo);
 router.get('/user/videos', getUserVideos);
@@ -34,4 +39,7 @@ router.delete('/:id', deleteVideo);
 router.get('/:id/status', getVideoStatus);
 router.post('/:id/process', processVideo);
 
-export const videoRoutes = router;
+// Output download routes
+router.get('/:id/outputs/:platform', getVideoOutput);
+
+export default router;

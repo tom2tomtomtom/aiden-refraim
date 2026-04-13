@@ -5,7 +5,7 @@ import { Pool } from 'pg';
 
 export async function initializeDatabase() {
     console.log('Starting database initialization...');
-    
+
     try {
         // 1. Create direct database connection
         console.log('Creating database connection...');
@@ -13,60 +13,25 @@ export async function initializeDatabase() {
             connectionString: process.env.SUPABASE_POSTGRES_URL
         });
 
-        // 2. Create exec_sql function directly
-        console.log('Creating exec_sql function...');
-        try {
-            await pool.query(`
-                CREATE OR REPLACE FUNCTION exec_sql(sql text)
-                RETURNS void AS $$
-                BEGIN
-                    EXECUTE sql;
-                END;
-                $$ LANGUAGE plpgsql SECURITY DEFINER;
-            `);
-            console.log('exec_sql function created successfully');
-        } catch (error) {
-            console.warn('Note: exec_sql function creation failed (may already exist):', error);
-        } finally {
-            await pool.end();
-        }
-        // 1. Create exec_sql function if it doesn't exist
-        console.log('Creating exec_sql function...');
-        const { error: funcError } = await supabase.rpc('exec_sql', {
-            sql: `
-                CREATE OR REPLACE FUNCTION exec_sql(sql text)
-                RETURNS void AS $$
-                BEGIN
-                    EXECUTE sql;
-                END;
-                $$ LANGUAGE plpgsql SECURITY DEFINER;
-            `
-        });
-
-        if (funcError) {
-            console.warn('Note: exec_sql function may already exist:', funcError);
-        }
-
         // 2. Read schema file
         console.log('Reading schema file...');
         const schemaPath = path.join(__dirname, 'schema.sql');
         const schemaSql = fs.readFileSync(schemaPath, 'utf8');
 
-        // 3. Execute schema
+        // 3. Execute schema directly via pool
         console.log('Executing schema...');
-        const { error: schemaError } = await supabase.rpc('exec_sql', {
-            sql: schemaSql
-        });
-
-        if (schemaError) {
-            console.error('Error executing schema:', schemaError);
-            throw new Error(`Failed to execute schema: ${schemaError.message}`);
+        try {
+            await pool.query(schemaSql);
+            console.log('Schema executed successfully');
+        } catch (error) {
+            console.error('Error executing schema:', error);
+            throw new Error(`Failed to execute schema: ${error instanceof Error ? error.message : String(error)}`);
         }
 
         // 4. Set up RLS policies
         console.log('Setting up RLS policies...');
-        const { error: rlsError } = await supabase.rpc('exec_sql', {
-            sql: `
+        try {
+            await pool.query(`
                 -- Enable RLS
                 ALTER TABLE videos ENABLE ROW LEVEL SECURITY;
 
@@ -93,19 +58,18 @@ export async function initializeDatabase() {
                 CREATE POLICY "Users can only delete their own videos"
                     ON videos FOR DELETE
                     USING (auth.uid() = user_id);
-            `
-        });
-
-        if (rlsError) {
-            console.error('Error setting up RLS policies:', rlsError);
-            throw new Error(`Failed to set up RLS policies: ${rlsError.message}`);
+            `);
+            console.log('RLS policies set up successfully');
+        } catch (error) {
+            console.error('Error setting up RLS policies:', error);
+            throw new Error(`Failed to set up RLS policies: ${error instanceof Error ? error.message : String(error)}`);
         }
 
         // 5. Refresh schema cache
         console.log('Refreshing schema cache...');
-        await supabase.rpc('exec_sql', {
-            sql: 'NOTIFY pgrst, \'reload schema\';'
-        });
+        await pool.query("NOTIFY pgrst, 'reload schema';");
+
+        await pool.end();
 
         // Wait for cache to refresh
         await new Promise(resolve => setTimeout(resolve, 1000));

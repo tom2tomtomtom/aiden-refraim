@@ -11,6 +11,7 @@ interface VideoUploadProps {
 
 export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [file, setFile] = useState<File | null>(null);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
@@ -58,18 +59,32 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
 
     try {
       setUploading(true);
+      setUploadProgress(0);
       console.log('Starting upload:', {
         fileName: file.name,
         fileType: file.type,
         fileSize: file.size,
-        jwt: jwt.substring(0, 20) + '...'
       });
+
+      // Simulate progress during upload
+      const progressInterval = setInterval(() => {
+        setUploadProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(progressInterval);
+            return 90;
+          }
+          return prev + 10;
+        });
+      }, 500);
 
       const apiClient = new ApiClient(jwt);
       const response = await apiClient.uploadVideo(
         file,
         ['youtube', 'instagram', 'tiktok'] // TODO: Make this configurable
       );
+
+      clearInterval(progressInterval);
+      setUploadProgress(100);
 
       console.log('Upload completed successfully:', response);
       onUploadComplete(response.id);
@@ -90,31 +105,40 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
       }
     } finally {
       setUploading(false);
+      setUploadProgress(0);
       setFile(null);
     }
   };
 
   return (
-    <div className="p-4 bg-white rounded-lg shadow">
+    <div className="p-4 bg-black-card border-2 border-border-subtle">
       <div
         {...getRootProps()}
-        className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-blue-500'}`}
+        className={`border-2 border-dashed p-8 text-center cursor-pointer transition-colors ${isDragActive ? 'border-red-hot bg-black-deep' : 'border-border-subtle hover:border-red-hot'}`}
       >
         <input {...getInputProps()} />
         {file ? (
           <div className="space-y-4">
-            <p className="text-sm text-gray-600">{file.name}</p>
+            <p className="text-sm text-white-muted">{file.name}</p>
+            {uploading && (
+              <div className="w-full max-w-xs mx-auto">
+                <div className="w-full h-3 bg-black-deep">
+                  <div className="h-full bg-red-hot transition-all" style={{ width: `${uploadProgress}%` }} />
+                </div>
+                <p className="text-xs text-white-dim mt-1">{uploadProgress}%</p>
+              </div>
+            )}
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 handleUpload();
               }}
               disabled={uploading}
-              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-4 py-2 bg-red-hot text-white text-xs font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {uploading ? (
                 <span className="flex items-center space-x-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+                  <div className="animate-spin h-4 w-4 border-b-2 border-white" />
                   <span>Uploading...</span>
                 </span>
               ) : (
@@ -127,11 +151,11 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
           </div>
         ) : (
           <div className="space-y-2">
-            <Upload className="w-12 h-12 mx-auto text-gray-400" />
-            <p className="text-gray-600">
+            <Upload className="w-12 h-12 mx-auto text-white-dim" />
+            <p className="text-white-muted">
               Drag and drop a video file here, or click to select
             </p>
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-white-dim">
               MP4, MOV, or AVI (max 500MB)
             </p>
           </div>

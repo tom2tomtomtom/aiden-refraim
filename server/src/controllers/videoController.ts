@@ -10,21 +10,10 @@ export const uploadVideo = async (req: Request, res: Response) => {
   try {
     // 1. Authenticate user
     console.log('Authenticating user...');
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    
-    if (authError) {
-      console.error('Authentication error:', authError);
-      return res.status(401).json({ 
-        error: 'Authentication failed',
-        details: authError.message
-      });
-    }
-    
+    const user = (req as any).user;
     if (!user) {
-      console.error('No user found in request');
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    
     console.log('User authenticated:', { id: user.id, email: user.email });
 
     // 2. Validate request
@@ -108,7 +97,7 @@ export const uploadVideo = async (req: Request, res: Response) => {
 
 export const getVideoById = async (req: Request, res: Response) => {
   try {
-    const { user } = await supabase.auth.getUser();
+    const user = (req as any).user;
     if (!user) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
@@ -133,7 +122,7 @@ export const getVideoById = async (req: Request, res: Response) => {
 
 export const getVideoStatus = async (req: Request, res: Response) => {
   try {
-    const { user } = await supabase.auth.getUser();
+    const user = (req as any).user;
     if (!user) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
@@ -161,7 +150,7 @@ export const getVideoStatus = async (req: Request, res: Response) => {
 
 export const processVideo = async (req: Request, res: Response) => {
   try {
-    const { user } = await supabase.auth.getUser();
+    const user = (req as any).user;
     if (!user) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
@@ -203,7 +192,7 @@ export const processVideo = async (req: Request, res: Response) => {
 
 export const getUserVideos = async (req: Request, res: Response) => {
   try {
-    const { user } = await supabase.auth.getUser();
+    const user = (req as any).user;
     if (!user) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
@@ -218,7 +207,7 @@ export const getUserVideos = async (req: Request, res: Response) => {
 
 export const deleteVideo = async (req: Request, res: Response) => {
   try {
-    const { user } = await supabase.auth.getUser();
+    const user = (req as any).user;
     if (!user) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
@@ -251,5 +240,46 @@ export const deleteVideo = async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error in deleteVideo:', error);
     res.status(500).json({ error: 'Error deleting video' });
+  }
+};
+
+export const getVideoOutput = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id;
+    const { id, platform } = req.params;
+
+    // Validate platform
+    const validPlatforms = ['instagram-story', 'instagram-feed-square', 'instagram-feed-portrait', 'facebook-story', 'facebook-feed', 'tiktok', 'youtube-main', 'youtube-shorts'];
+    if (!platform || !validPlatforms.includes(platform)) {
+      return res.status(400).json({ error: 'Invalid platform', details: `Valid platforms: ${validPlatforms.join(', ')}` });
+    }
+
+    // Get video, verify ownership
+    const { data: video, error } = await supabase
+      .from('videos')
+      .select('*')
+      .eq('id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (error || !video) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+
+    // Check platform_outputs has this platform
+    const outputs = video.platform_outputs;
+    if (!outputs || !outputs[platform] || !outputs[platform].url) {
+      return res.status(404).json({ error: `No output found for platform: ${platform}` });
+    }
+
+    return res.json({
+      url: outputs[platform].url,
+      platform,
+      format: outputs[platform].format || platform,
+      file_size: outputs[platform].file_size || 0,
+    });
+  } catch (error) {
+    console.error('Error getting video output:', error);
+    return res.status(500).json({ error: 'Failed to get video output' });
   }
 };

@@ -255,12 +255,12 @@ router.post('/upload', requireAuth, upload.single('video'), async (req: MulterRe
       errorDetails = String(error);
     }
 
-    return res.status(statusCode).json({ 
+    return res.status(statusCode).json({
       error: errorMessage,
       details: errorDetails,
       code: statusCode
     });
-
+  } finally {
     // Clean up temp file if it exists
     if (videoFile?.path && fs.existsSync(videoFile.path)) {
       try {

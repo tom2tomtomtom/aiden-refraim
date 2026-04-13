@@ -11,17 +11,14 @@ export class DatabaseService {
       if (!data.original_url) throw new Error('original_url is required');
       if (!data.status) throw new Error('status is required');
 
-      // 2. Ensure platforms is an array
-      if (!Array.isArray(data.platforms)) {
-        console.warn('Platforms is not an array, defaulting to empty array');
-        data.platforms = [];
-      }
+      // 2. Strip fields not in videos table
+      const { platforms, ...videoFields } = data as any;
 
       // 3. Create the record
       const { data: video, error } = await supabase
         .from('videos')
         .insert([{
-          ...data,
+          ...videoFields,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
         }])
