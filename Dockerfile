@@ -16,8 +16,8 @@ RUN npm install
 # Copy source
 COPY . .
 
-# Install client dependencies fresh inside the container (fixes platform-specific rollup binary)
-RUN cd client && rm -rf node_modules package-lock.json && npm install
+# Fix platform-specific rollup binary (npm bug with optional deps from macOS lockfile)
+RUN npm install @rollup/rollup-linux-x64-gnu
 
 # Build client
 RUN cd client && npx vite build
