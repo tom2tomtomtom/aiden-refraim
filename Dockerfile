@@ -5,16 +5,19 @@ RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy package files
+# Copy all package files
 COPY package*.json ./
 COPY server/package*.json ./server/
 COPY client/package*.json ./client/
 
-# Install all dependencies
+# Install root and server dependencies
 RUN npm install
 
 # Copy source
 COPY . .
+
+# Install client dependencies fresh inside the container (fixes platform-specific rollup binary)
+RUN cd client && rm -rf node_modules package-lock.json && npm install
 
 # Build client
 RUN cd client && npx vite build
