@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
+import path from 'path';
 import { json, urlencoded } from 'body-parser';
 import rateLimit from 'express-rate-limit';
 import testRoutes from './routes/test';
@@ -100,6 +101,16 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/videos', focusPointRoutes);
 app.use('/api/videos', scanRoutes);
 app.use('/api/billing', billingRoutes);
+
+// Serve client static files (built by Vite)
+const clientDistPath = path.join(__dirname, '../../client/dist');
+app.use(express.static(clientDistPath));
+
+// SPA catch-all: serve index.html for any non-API route
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api')) return next();
+  res.sendFile(path.join(clientDistPath, 'index.html'));
+});
 
 // Error handling with detailed logging
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

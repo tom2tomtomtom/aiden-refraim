@@ -10,11 +10,14 @@ COPY package*.json ./
 COPY server/package*.json ./server/
 COPY client/package*.json ./client/
 
-# Install dependencies
+# Install all dependencies
 RUN npm install
 
 # Copy source
 COPY . .
+
+# Build client
+RUN cd client && npx vite build
 
 # Build server (ignore TS errors)
 RUN cd server && npx tsc || true
