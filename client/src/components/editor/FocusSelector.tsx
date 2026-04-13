@@ -64,9 +64,9 @@ export default function FocusSelector() {
   // Scan options (local)
   const [scanOptions, setScanOptions] = useState<ScanOptions>({
     interval: 0.5,
-    min_score: 0.3,
-    similarity_threshold: 0.3,
-    min_detections: 2,
+    min_score: 0.2,
+    similarity_threshold: 0.2,
+    min_detections: 1,
   });
 
   // Thumbnails: map subject class+position key to data URL captured during scan
