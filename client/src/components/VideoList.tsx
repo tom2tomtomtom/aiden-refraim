@@ -37,9 +37,7 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
 
     try {
       setLoading(true);
-      console.log('Loading videos...');
       const fetchedVideos = await api.getUserVideos();
-      console.log('Fetched videos:', fetchedVideos);
       setVideos(fetchedVideos);
       setError(null);
 
@@ -65,8 +63,7 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
           }
         }, 5000); // Poll every 5 seconds
       }
-    } catch (err) {
-      console.error('Failed to load videos:', err);
+    } catch {
       setError('Failed to load videos');
     } finally {
       setLoading(false);

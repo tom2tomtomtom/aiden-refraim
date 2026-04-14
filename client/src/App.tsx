@@ -47,7 +47,7 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-hot" />
+        <div className="animate-spin h-8 w-8 border-b-2 border-red-hot" />
       </div>
     );
   }
@@ -68,7 +68,7 @@ function App() {
             <ErrorBoundary>
             <React.Suspense fallback={
               <div className="flex items-center justify-center h-screen bg-black-deep">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-hot" />
+                <div className="animate-spin h-8 w-8 border-b-2 border-red-hot" />
               </div>
             }>
             <div className="min-h-screen bg-black-deep">

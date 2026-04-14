@@ -1,10 +1,27 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useVideo } from '../../contexts/VideoContext';
 import { useFocusPoints } from '../../contexts/FocusPointsContext';
+import { useApi } from '../../contexts/ApiContext';
 import VideoScannerService from '../../services/VideoScannerService';
 import type { Subject as ScannerSubject } from '../../services/VideoScannerService';
 import type { Subject, ScanOptions, ScanStatus } from '../../types/scan';
 import type { FocusPointCreate } from '../../types/focusPoint';
+import { segmentPositionsToFocusPoints } from '../../services/FocusInterpolationService';
+import { Sparkles } from 'lucide-react';
+
+interface AIStrategy {
+  segments: Array<{
+    time_start: number;
+    time_end: number;
+    follow_subject: string;
+    composition: string;
+    offset_x: number;
+    offset_y: number;
+    transition: string;
+    reason: string;
+  }>;
+  reasoning: string;
+}
 
 interface LiveDetection {
   frameTime: number;
@@ -48,6 +65,7 @@ function convertScannerSubjects(
 export default function FocusSelector() {
   const { videoId, videoElementRef, duration } = useVideo();
   const { focusPoints, addFocusPointsBatch, removeAllFocusPoints } = useFocusPoints();
+  const { api } = useApi();
 
   // Local scan state
   const [scanStatus, setScanStatus] = useState<ScanStatus>('idle');
@@ -60,6 +78,11 @@ export default function FocusSelector() {
   const [detectedSubjects, setDetectedSubjects] = useState<Subject[]>([]);
   const [acceptedIds, setAcceptedIds] = useState<Set<string>>(new Set());
   const [rejectedIds, setRejectedIds] = useState<Set<string>>(new Set());
+
+  // AI editor state
+  const [targetPlatform, setTargetPlatform] = useState('tiktok');
+  const [aiStrategy, setAiStrategy] = useState<AIStrategy | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
 
   // Scan options (local)
   const [scanOptions, setScanOptions] = useState<ScanOptions>({
@@ -293,35 +316,32 @@ export default function FocusSelector() {
     setScanStatus('finalizing');
     const accepted = detectedSubjects.filter(s => acceptedIds.has(s.id));
 
-    const focusPointCreates: FocusPointCreate[] = accepted.map(subject => {
-      const firstPos = subject.positions[0];
-      const bx = firstPos ? firstPos.bbox[0] : 25;
-      const by = firstPos ? firstPos.bbox[1] : 25;
-      const bw = firstPos ? firstPos.bbox[2] : 50;
-      const bh = firstPos ? firstPos.bbox[3] : 50;
+    // Create segmented focus points with position interpolation
+    const allFocusPoints: FocusPointCreate[] = [];
 
-      const cx = bx + bw / 2;
-      const cy = by + bh / 2;
+    for (const subject of accepted) {
+      const segments = segmentPositionsToFocusPoints(
+        subject.positions,
+        subject.class || 'detected_region',
+        2.0
+      );
 
-      const width = Math.min(bw, 100);
-      const height = Math.min(bh, 100);
-      const x = Math.min(Math.max(0, cx - width / 2), 100 - width);
-      const y = Math.min(Math.max(0, cy - height / 2), 100 - height);
+      for (const seg of segments) {
+        allFocusPoints.push({
+          time_start: seg.time_start,
+          time_end: seg.time_end,
+          x: seg.x,
+          y: seg.y,
+          width: seg.width,
+          height: seg.height,
+          description: seg.description,
+          source: seg.source,
+        });
+      }
+    }
 
-      return {
-        time_start: subject.first_seen,
-        time_end: subject.last_seen,
-        x,
-        y,
-        width,
-        height,
-        description: subject.class || 'detected_region',
-        source: 'ai_detection' as const,
-      };
-    });
-
-    if (focusPointCreates.length > 0) {
-      await addFocusPointsBatch(focusPointCreates);
+    if (allFocusPoints.length > 0) {
+      await addFocusPointsBatch(allFocusPoints);
     }
 
     setScanStatus('idle');
@@ -335,7 +355,98 @@ export default function FocusSelector() {
     setDetectedSubjects([]);
     setAcceptedIds(new Set());
     setRejectedIds(new Set());
+    setAiStrategy(null);
   }, []);
+
+  const requestAISuggestion = useCallback(async () => {
+    if (!api || !videoId || detectedSubjects.length === 0) return;
+
+    setAiLoading(true);
+    setError(null);
+
+    try {
+      const subjectInputs = detectedSubjects.map(s => {
+        const avgCoverage = s.positions.reduce((sum, p) => {
+          return sum + (p.bbox[2] * p.bbox[3]) / 100;
+        }, 0) / (s.positions.length || 1);
+        const avgConfidence = s.positions.reduce((sum, p) => sum + p.score, 0) / (s.positions.length || 1);
+
+        return {
+          id: s.id,
+          class: s.class,
+          first_seen: s.first_seen,
+          last_seen: s.last_seen,
+          position_count: s.positions.length,
+          avg_screen_coverage: avgCoverage,
+          avg_confidence: avgConfidence,
+        };
+      });
+
+      const strategy = await api.getAIFocusStrategy(videoId, subjectInputs, duration, targetPlatform);
+      setAiStrategy(strategy);
+    } catch (err) {
+      setError('AI suggestion failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setAiLoading(false);
+    }
+  }, [api, videoId, detectedSubjects, duration, targetPlatform]);
+
+  const applyAIStrategy = useCallback(async () => {
+    if (!aiStrategy) return;
+
+    setScanStatus('finalizing');
+
+    const focusPointCreates: FocusPointCreate[] = aiStrategy.segments.map(seg => {
+      // Find the matching subject's positions
+      const subject = detectedSubjects.find(s => s.class === seg.follow_subject);
+      const positions = subject?.positions.filter(
+        p => p.time >= seg.time_start && p.time <= seg.time_end
+      ) || [];
+
+      let baseX = 50, baseY = 50, width = 30, height = 30;
+
+      if (positions.length > 0) {
+        const avgBbox = positions.reduce(
+          (acc, p) => ({
+            x: acc.x + p.bbox[0] + p.bbox[2] / 2,
+            y: acc.y + p.bbox[1] + p.bbox[3] / 2,
+            w: acc.w + p.bbox[2],
+            h: acc.h + p.bbox[3],
+          }),
+          { x: 0, y: 0, w: 0, h: 0 }
+        );
+        baseX = avgBbox.x / positions.length;
+        baseY = avgBbox.y / positions.length;
+        width = avgBbox.w / positions.length;
+        height = avgBbox.h / positions.length;
+      }
+
+      // Apply composition offsets
+      const adjustedX = Math.max(0, Math.min(100 - width, baseX - width / 2 + seg.offset_x));
+      const adjustedY = Math.max(0, Math.min(100 - height, baseY - height / 2 + seg.offset_y));
+
+      return {
+        time_start: seg.time_start,
+        time_end: seg.time_end,
+        x: adjustedX,
+        y: adjustedY,
+        width: Math.min(width, 100),
+        height: Math.min(height, 100),
+        description: `${seg.follow_subject} (${seg.composition})`,
+        source: 'ai_detection' as const,
+      };
+    });
+
+    if (focusPointCreates.length > 0) {
+      await addFocusPointsBatch(focusPointCreates);
+    }
+
+    setScanStatus('idle');
+    setDetectedSubjects([]);
+    setAcceptedIds(new Set());
+    setRejectedIds(new Set());
+    setAiStrategy(null);
+  }, [aiStrategy, detectedSubjects, addFocusPointsBatch]);
 
   if (!videoId) return null;
 
@@ -470,7 +581,7 @@ export default function FocusSelector() {
           <div className="mb-3 p-3 bg-black-deep border border-border-subtle">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
+                <div className="w-3 h-3 bg-green-500 animate-pulse" />
                 <span className="font-bold text-orange-accent uppercase text-xs">Live Detection</span>
               </div>
               {liveDetection && (
@@ -574,6 +685,72 @@ export default function FocusSelector() {
               Cancel
             </button>
           </div>
+
+          {/* AI Editor Section */}
+          {detectedSubjects.length > 0 && (
+            <div className="mb-4 p-3 bg-black-deep border border-border-subtle">
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles className="w-4 h-4 text-orange-accent" />
+                <h5 className="text-xs font-bold text-orange-accent uppercase tracking-wide">AI Focus Editor</h5>
+              </div>
+
+              <div className="flex items-center gap-2 mb-3">
+                <label className="text-[10px] text-white-dim uppercase tracking-wide shrink-0">Platform:</label>
+                <select
+                  value={targetPlatform}
+                  onChange={(e) => { setTargetPlatform(e.target.value); setAiStrategy(null); }}
+                  className="flex-1 bg-black-card border border-border-subtle text-white-full px-2 py-1 text-xs"
+                >
+                  <option value="tiktok">TikTok (9:16)</option>
+                  <option value="instagram-story">Instagram Story (9:16)</option>
+                  <option value="instagram-feed-square">Instagram Feed Square (1:1)</option>
+                  <option value="instagram-feed-portrait">Instagram Feed Portrait (4:5)</option>
+                  <option value="youtube-shorts">YouTube Shorts (9:16)</option>
+                  <option value="youtube-main">YouTube Main (16:9)</option>
+                  <option value="facebook-story">Facebook Story (9:16)</option>
+                  <option value="facebook-feed">Facebook Feed (1:1)</option>
+                </select>
+                <button
+                  onClick={requestAISuggestion}
+                  disabled={aiLoading}
+                  className="px-3 py-1.5 bg-orange-accent text-white text-xs font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 shrink-0"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  {aiLoading ? 'Analyzing...' : 'AI Suggest'}
+                </button>
+              </div>
+
+              {/* AI Strategy Results */}
+              {aiStrategy && (
+                <div className="space-y-2">
+                  <p className="text-xs text-white-muted">{aiStrategy.reasoning}</p>
+
+                  <div className="max-h-40 overflow-y-auto space-y-1">
+                    {aiStrategy.segments.map((seg, idx) => (
+                      <div key={idx} className="flex items-center gap-2 text-[10px] bg-black-card p-2 border border-border-subtle">
+                        <span className="text-white-dim font-mono shrink-0">
+                          {seg.time_start.toFixed(1)}s-{seg.time_end.toFixed(1)}s
+                        </span>
+                        <span className="text-orange-accent font-bold uppercase">{seg.follow_subject}</span>
+                        <span className="text-white-dim">{seg.composition}</span>
+                        <span className={`ml-auto px-1 ${seg.transition === 'hard_cut' ? 'text-red-hot' : 'text-green-500'}`}>
+                          {seg.transition === 'hard_cut' ? 'CUT' : 'PAN'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={applyAIStrategy}
+                    className="w-full px-3 py-2 bg-orange-accent text-white text-xs font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all flex items-center justify-center gap-2"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    Apply AI Strategy ({aiStrategy.segments.length} segments)
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {detectedSubjects.map(subject => {

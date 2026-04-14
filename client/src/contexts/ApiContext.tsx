@@ -13,12 +13,7 @@ export function ApiProvider({ children }: { children: React.ReactNode }) {
   
   // Only create API client if we have a valid JWT
   const api = useMemo(() => {
-    if (loading || !jwt) {
-      console.log('No API client created - loading:', loading, 'hasJwt:', !!jwt);
-      return null;
-    }
-
-    console.log('Creating API client with JWT');
+    if (loading || !jwt) return null;
     return new ApiClient(jwt);
   }, [jwt, loading]);
 

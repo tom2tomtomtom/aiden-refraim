@@ -11,6 +11,7 @@ import focusPointRoutes from './routes/focusPointRoutes';
 import scanRoutes from './routes/scanRoutes';
 import billingRoutes from './routes/billingRoutes';
 import webhookRoutes from './routes/webhookRoutes';
+import aiEditorRoutes from './routes/aiEditorRoutes';
 
 const app = express();
 
@@ -100,6 +101,7 @@ app.use('/api/videos', videoRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/videos', focusPointRoutes);
 app.use('/api/videos', scanRoutes);
+app.use('/api/videos', aiEditorRoutes);
 app.use('/api/billing', billingRoutes);
 
 // Serve client static files (built by Vite)

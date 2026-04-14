@@ -144,7 +144,7 @@ export function Login() {
               className="w-full bg-red-hot text-white px-6 py-3 text-sm font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? (
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mx-auto" />
+                <div className="animate-spin h-5 w-5 border-b-2 border-white mx-auto" />
               ) : isSignUp ? (
                 'Sign Up'
               ) : (

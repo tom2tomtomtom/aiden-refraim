@@ -128,6 +128,12 @@ export function Dashboard() {
         />
       </div>
 
+      <ProcessingDialog
+        open={processingDialogOpen}
+        onOpenChange={setProcessingDialogOpen}
+        onProcess={handleStartProcessing}
+      />
+
       <Toast
         open={toast.open}
         onOpenChange={(open) => setToast((prev) => ({ ...prev, open }))}

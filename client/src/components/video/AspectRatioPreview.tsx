@@ -83,6 +83,7 @@ export default function AspectRatioPreview({ ratio, width }: AspectRatioPreviewP
         <video
           ref={fillVideoRef}
           src={videoUrl}
+          crossOrigin="anonymous"
           className="w-full h-full"
           style={{
             objectFit: 'cover',
@@ -103,6 +104,7 @@ export default function AspectRatioPreview({ ratio, width }: AspectRatioPreviewP
         <video
           ref={letterboxVideoRef}
           src={videoUrl}
+          crossOrigin="anonymous"
           className="max-w-full max-h-full"
           style={{
             objectFit: 'contain',

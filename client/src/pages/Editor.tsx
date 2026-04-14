@@ -1,16 +1,19 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useVideo } from '../contexts/VideoContext';
 import { useFocusPoints } from '../contexts/FocusPointsContext';
 import VideoPlayer from '../components/editor/VideoPlayer';
 import VideoTimeline from '../components/editor/VideoTimeline';
 import FocusSelector from '../components/editor/FocusSelector';
+import FocusPointOverlay from '../components/editor/FocusPointOverlay';
+import FocusPointEditor from '../components/editor/FocusPointEditor';
 import AspectRatioPreview from '../components/video/AspectRatioPreview';
 
 export default function Editor() {
   const { videoId: paramVideoId } = useParams<{ videoId: string }>();
   const { loadVideo, videoUrl, isLoading, error } = useVideo();
   const { loadFocusPoints } = useFocusPoints();
+  const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
 
   useEffect(() => {
     if (paramVideoId) {
@@ -50,8 +53,30 @@ export default function Editor() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Video + Controls */}
         <div className="lg:col-span-2 space-y-4">
-          <VideoPlayer />
-          <VideoTimeline />
+          {/* Video player with focus point overlay */}
+          <div className="relative">
+            <VideoPlayer />
+            {videoUrl && (
+              <FocusPointOverlay
+                selectedPointId={selectedPointId}
+                onFocusPointSelect={setSelectedPointId}
+              />
+            )}
+          </div>
+
+          <VideoTimeline
+            selectedPointId={selectedPointId}
+            onFocusPointSelect={setSelectedPointId}
+          />
+
+          {/* Focus point editor (shown when a point is selected) */}
+          {selectedPointId && (
+            <FocusPointEditor
+              selectedPointId={selectedPointId}
+              onClose={() => setSelectedPointId(null)}
+            />
+          )}
+
           <FocusSelector />
         </div>
 

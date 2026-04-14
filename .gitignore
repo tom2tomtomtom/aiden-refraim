@@ -39,3 +39,6 @@ tmp/
 *.tmp
 *.temp
 node_modules
+
+# Local Netlify folder
+.netlify

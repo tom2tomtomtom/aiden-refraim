@@ -60,11 +60,6 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
     try {
       setUploading(true);
       setUploadProgress(0);
-      console.log('Starting upload:', {
-        fileName: file.name,
-        fileType: file.type,
-        fileSize: file.size,
-      });
 
       // Simulate progress during upload
       const progressInterval = setInterval(() => {
@@ -86,18 +81,8 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
       clearInterval(progressInterval);
       setUploadProgress(100);
 
-      console.log('Upload completed successfully:', response);
       onUploadComplete(response.id);
     } catch (error) {
-      console.error('Upload error:', {
-        error,
-        file: {
-          name: file.name,
-          type: file.type,
-          size: file.size
-        }
-      });
-
       if (error instanceof Error) {
         onError(error);
       } else {

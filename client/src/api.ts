@@ -51,7 +51,6 @@ export class ApiClient {
     if (!accessToken) {
       throw new Error('Access token is required');
     }
-    console.log('ApiClient initialized, hasToken:', !!accessToken);
     this.accessToken = accessToken;
   }
 
@@ -71,16 +70,6 @@ export class ApiClient {
       }
 
       const url = `${API_BASE_URL}${endpoint}`;
-      console.log('Making request:', {
-        url,
-        method: options.method || 'GET',
-        hasToken: !!this.accessToken,
-        isFormData,
-        bodySize: options.body instanceof FormData ? 
-          Array.from(options.body.entries()).reduce((size, [_, value]) => 
-            size + (value instanceof File ? value.size : value.toString().length), 0) : 
-          options.body ? JSON.stringify(options.body).length : 0
-      });
 
       let response: Response;
       try {
@@ -102,8 +91,7 @@ export class ApiClient {
       if (contentType?.includes('application/json')) {
         try {
           responseData = await response.json();
-        } catch (parseError) {
-          console.error('Failed to parse JSON response:', parseError);
+        } catch {
           throw new Error('Server returned invalid JSON response');
         }
       } else {
@@ -116,13 +104,6 @@ export class ApiClient {
       }
 
       if (!response.ok) {
-        console.error('Request failed:', {
-          status: response.status,
-          statusText: response.statusText,
-          error: responseData
-        });
-
-        // Try to extract error details
         let errorMessage = 'Request failed';
         if (responseData?.error) {
           errorMessage += `: ${responseData.error}`;
@@ -141,12 +122,6 @@ export class ApiClient {
 
       return responseData;
     } catch (error) {
-      console.error('Request error:', {
-        error,
-        stack: error instanceof Error ? error.stack : undefined,
-        endpoint,
-        method: options.method || 'GET'
-      });
       throw error;
     }
   }
@@ -177,6 +152,8 @@ export class ApiClient {
     const formData = new FormData();
     formData.append('video', file);
     formData.append('platforms', JSON.stringify(platforms));
+    const title = file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
+    formData.append('title', title);
 
     return this.request<Video>('/videos/upload', {
       method: 'POST',
@@ -185,15 +162,7 @@ export class ApiClient {
   }
 
   async getUserVideos(): Promise<Video[]> {
-    console.log('Fetching user videos...');
-    try {
-      const videos = await this.request<Video[]>('/videos/user/videos');
-      console.log('Fetched videos:', videos);
-      return videos;
-    } catch (err) {
-      console.error('Failed to fetch videos:', err);
-      throw err;
-    }
+    return this.request<Video[]>('/videos/user/videos');
   }
 
   // Focus Points
@@ -283,5 +252,38 @@ export class ApiClient {
 
   async createPortalSession(): Promise<{ url: string }> {
     return this.request('/billing/portal', { method: 'POST' });
+  }
+
+  // AI Editor
+  async getAIFocusStrategy(
+    videoId: string,
+    subjects: Array<{
+      id: string;
+      class: string;
+      first_seen: number;
+      last_seen: number;
+      position_count: number;
+      avg_screen_coverage: number;
+      avg_confidence: number;
+    }>,
+    videoDuration: number,
+    targetPlatform: string
+  ): Promise<{
+    segments: Array<{
+      time_start: number;
+      time_end: number;
+      follow_subject: string;
+      composition: string;
+      offset_x: number;
+      offset_y: number;
+      transition: string;
+      reason: string;
+    }>;
+    reasoning: string;
+  }> {
+    return this.request(`/videos/${videoId}/ai-edit`, {
+      method: 'POST',
+      body: JSON.stringify({ subjects, videoDuration, targetPlatform }),
+    });
   }
 }

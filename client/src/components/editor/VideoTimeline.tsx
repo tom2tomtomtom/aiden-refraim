@@ -2,13 +2,18 @@ import React, { useRef, useCallback, useState, useEffect } from 'react';
 import { useVideo } from '../../contexts/VideoContext';
 import { useFocusPoints } from '../../contexts/FocusPointsContext';
 
+interface VideoTimelineProps {
+  selectedPointId?: string | null;
+  onFocusPointSelect?: (id: string | null) => void;
+}
+
 function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
-export default function VideoTimeline() {
+export default function VideoTimeline({ selectedPointId, onFocusPointSelect }: VideoTimelineProps = {}) {
   const { currentTime, duration, isPlaying, setCurrentTime, setIsPlaying } = useVideo();
   const { focusPoints } = useFocusPoints();
   const trackRef = useRef<HTMLDivElement>(null);
@@ -109,12 +114,26 @@ export default function VideoTimeline() {
             if (duration === 0) return null;
             const leftPct = (fp.time_start / duration) * 100;
             const widthPct = ((fp.time_end - fp.time_start) / duration) * 100;
+            const isSelected = fp.id === selectedPointId;
             return (
               <div
                 key={fp.id}
-                className="absolute top-0 h-full bg-yellow-electric opacity-40 pointer-events-none"
-                style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                className={`absolute top-0 h-full cursor-pointer transition-opacity ${
+                  isSelected
+                    ? 'bg-red-hot opacity-60 z-10'
+                    : 'bg-yellow-electric opacity-40 hover:opacity-60'
+                }`}
+                style={{ left: `${leftPct}%`, width: `${Math.max(widthPct, 0.5)}%` }}
                 title={`${fp.description} (${formatTime(fp.time_start)} - ${formatTime(fp.time_end)})`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onFocusPointSelect?.(isSelected ? null : fp.id);
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  setCurrentTime(fp.time_start);
+                  onFocusPointSelect?.(fp.id);
+                }}
               />
             );
           })}
