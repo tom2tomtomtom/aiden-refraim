@@ -1818,8 +1818,9 @@ export default function FocusSelector() {
           </div>
 
           {/* ---- STEP: SUBJECTS ---- */}
+          {/* ---- STEP: SUBJECTS ---- */}
           {reviewStep === 'subjects' && (
-            <div>
+            <>
               <div className="p-3 bg-black-deep border border-border-subtle mb-4">
                 <p className="text-sm text-white-muted mb-1">
                   <span className="text-orange-accent font-bold">{detectedSubjects.length}</span> subjects found.
@@ -1829,10 +1830,6 @@ export default function FocusSelector() {
                   Click name to rename. Drag box to reposition. Drag corner to resize.
                 </p>
               </div>
-
-          {/* Subject cards — inside 'subjects' step */}
-          {reviewStep === 'subjects' && (
-            <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
                 {detectedSubjects.map(subject => {
                   const isRejected = rejectedIds.has(subject.id);
@@ -1969,8 +1966,8 @@ export default function FocusSelector() {
                 />
               </div>
 
-          {/* Key Frame Strip + Annotation */}
-          {keyFrames.length > 0 && (
+              {/* Key Frame Strip + Annotation */}
+              {keyFrames.length > 0 && (
             <div className="mb-4 p-3 bg-black-deep border border-border-subtle">
               <div className="flex items-center gap-2 mb-2">
                 <PenTool className="w-4 h-4 text-orange-accent" />
@@ -2163,6 +2160,7 @@ export default function FocusSelector() {
               </div>
             </div>
           )}
+          {/* end story step */}
 
           {/* ---- STEP: AI REFRAME ---- */}
           {reviewStep === 'ai' && (
