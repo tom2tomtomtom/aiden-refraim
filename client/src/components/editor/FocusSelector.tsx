@@ -308,6 +308,7 @@ export default function FocusSelector() {
     quality: 'good' | 'needs_adjustment' | 'bad';
     issues: string[];
     suggestion: string;
+    cropImage?: string;
   }> | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
 
@@ -962,7 +963,10 @@ export default function FocusSelector() {
       if (wasPlaying) video.play();
 
       const result = await api.reviewCrops(videoId, cropsToSend, targetPlatform);
-      setCropReviews(result.reviews);
+      setCropReviews(result.reviews.map((r, i) => ({
+        ...r,
+        cropImage: cropsToSend[i]?.imageBase64,
+      })));
     } catch (err) {
       setError('Crop review failed: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
@@ -1722,30 +1726,55 @@ export default function FocusSelector() {
                           {/* Expanded: QA issues + sliders together */}
                           {isExpanded && (
                             <div className="px-3 pb-3 space-y-3 border-t border-border-subtle/50">
-                              {/* QA feedback inline */}
-                              {review && review.quality !== 'good' && (
-                                <div className={`mt-2 p-2 border ${review.quality === 'bad' ? 'border-red-hot/30 bg-red-hot/5' : 'border-yellow-500/30 bg-yellow-500/5'}`}>
-                                  <div className="text-[10px] font-bold uppercase text-white-dim mb-1">Issues found:</div>
-                                  {review.issues.map((issue, i) => (
-                                    <div key={i} className="text-[10px] text-white-dim flex items-start gap-1">
-                                      <span className={review.quality === 'bad' ? 'text-red-hot' : 'text-yellow-500'}>•</span>
-                                      <span>{issue}</span>
-                                    </div>
-                                  ))}
-                                  {review.suggestion && (
-                                    <div className="mt-1 text-[10px] text-green-500 font-medium">
-                                      Suggestion: {review.suggestion}
+                              {/* Crop preview image + QA feedback side by side */}
+                              {review && (
+                                <div className="mt-2 flex gap-3 items-start">
+                                  {/* Cropped frame thumbnail */}
+                                  {review.cropImage && (
+                                    <div className={`shrink-0 border-2 ${
+                                      review.quality === 'good' ? 'border-green-500' : review.quality === 'bad' ? 'border-red-hot' : 'border-yellow-500'
+                                    }`}>
+                                      <img
+                                        src={review.cropImage}
+                                        alt={`Crop at ${review.time.toFixed(1)}s`}
+                                        className="w-[100px] h-auto"
+                                        draggable={false}
+                                      />
                                     </div>
                                   )}
+
+                                  {/* Issues or pass message */}
+                                  <div className="flex-1 min-w-0">
+                                    {review.quality !== 'good' ? (
+                                      <div className={`p-2 border ${review.quality === 'bad' ? 'border-red-hot/30 bg-red-hot/5' : 'border-yellow-500/30 bg-yellow-500/5'}`}>
+                                        <div className="text-[10px] font-bold uppercase text-white-dim mb-1">Issues:</div>
+                                        {review.issues.map((issue, i) => (
+                                          <div key={i} className="text-[10px] text-white-dim flex items-start gap-1">
+                                            <span className={review.quality === 'bad' ? 'text-red-hot' : 'text-yellow-500'}>•</span>
+                                            <span>{issue}</span>
+                                          </div>
+                                        ))}
+                                        {review.suggestion && (
+                                          <div className="mt-1.5 text-[10px] text-green-500 font-medium">
+                                            {review.suggestion}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="p-2 border border-green-500/30 bg-green-500/5">
+                                        <div className="text-[10px] text-green-500 flex items-center gap-1">
+                                          <ShieldCheck className="w-3 h-3" />
+                                          Looks good — well composed
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
                               )}
 
-                              {review && review.quality === 'good' && (
-                                <div className="mt-2 p-2 border border-green-500/30 bg-green-500/5">
-                                  <div className="text-[10px] text-green-500 flex items-center gap-1">
-                                    <ShieldCheck className="w-3 h-3" />
-                                    Composition looks good — no issues detected
-                                  </div>
+                              {!review && (
+                                <div className="mt-2 p-2 border border-border-subtle bg-black-deep">
+                                  <div className="text-[10px] text-white-dim italic">Run QA Review to check this crop's composition</div>
                                 </div>
                               )}
 
