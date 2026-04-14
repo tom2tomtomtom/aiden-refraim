@@ -178,6 +178,22 @@ export default function FocusSelector() {
     const wasPlaying = !video.paused;
     if (wasPlaying) video.pause();
 
+    // Reset video to beginning before scanning to avoid stale frame issues on re-scan
+    if (video.currentTime > 0) {
+      video.currentTime = 0;
+      await new Promise<void>((resolve) => {
+        const onSeeked = () => {
+          video.removeEventListener('seeked', onSeeked);
+          resolve();
+        };
+        video.addEventListener('seeked', onSeeked);
+        setTimeout(() => {
+          video.removeEventListener('seeked', onSeeked);
+          resolve();
+        }, 2000);
+      });
+    }
+
     try {
       const scanner = new VideoScannerService();
       scanner.initialize(video);
@@ -725,7 +741,7 @@ export default function FocusSelector() {
                 <div className="space-y-2">
                   <p className="text-xs text-white-muted">{aiStrategy.reasoning}</p>
 
-                  <div className="max-h-40 overflow-y-auto space-y-1">
+                  <div className="max-h-64 overflow-y-auto space-y-1">
                     {aiStrategy.segments.map((seg, idx) => (
                       <div key={idx} className="flex items-center gap-2 text-[10px] bg-black-card p-2 border border-border-subtle">
                         <span className="text-white-dim font-mono shrink-0">

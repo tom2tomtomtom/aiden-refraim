@@ -111,7 +111,7 @@ function buildPrompt(
     .map(s => `- ${s.class}: visible ${s.first_seen.toFixed(1)}s-${s.last_seen.toFixed(1)}s, detected ${s.position_count} times, avg ${s.avg_screen_coverage.toFixed(1)}% screen coverage, confidence ${(s.avg_confidence * 100).toFixed(0)}%`)
     .join('\n');
 
-  return `You are a professional video editor. Analyze these detected subjects and create a focus/framing strategy for reframing this video.
+  return `You are a professional video editor creating a dynamic reframing strategy. Your goal is to produce an engaging, visually varied result—not a static lock on one subject.
 
 VIDEO: ${videoDuration.toFixed(1)}s duration
 TARGET: ${platform}
@@ -120,11 +120,19 @@ PLATFORM RULES: ${platformRule}
 DETECTED SUBJECTS:
 ${subjectList}
 
-Create a focus strategy that:
-1. Identifies the hero subject for each time segment (the most important thing to follow)
-2. Applies composition rules appropriate for the platform
-3. Uses smooth_pan for gradual changes and hard_cut for scene changes or new subjects entering
-4. Provides offset_x and offset_y adjustments (-50 to 50) for composition (e.g., +15 offset_x for rule of thirds right)
+IMPORTANT CREATIVE DIRECTION:
+- Do NOT follow the same subject for every segment. Switch between subjects when multiple are visible in the same time window. For example, if a person and dog are both visible from 2-17s, dedicate some segments to the dog.
+- Vary composition across segments (center, rule_of_thirds_left, rule_of_thirds_right, top_center). Avoid repeating the same composition for consecutive segments.
+- Use hard_cut when switching between different subjects. Use smooth_pan when staying on the same subject but adjusting framing.
+- If the hero subject leaves the frame (their visibility window ends), switch to the next best subject or use "none" with center composition.
+- Vary segment durations based on action: shorter (2-4s) for dynamic moments with multiple subjects, longer (5-8s) for solo subjects.
+- Use offset_x and offset_y creatively: negative offset_y (-5 to -15) for headroom on people, positive offset_x (+10 to +20) for rule_of_thirds_right, etc.
+
+Create a focus strategy with these rules:
+1. Identify the best subject for each time segment—alternate between subjects when possible
+2. Apply composition rules appropriate for the platform
+3. Use smooth_pan for gradual changes and hard_cut for subject switches or scene changes
+4. Provide offset_x and offset_y adjustments (-50 to 50) for composition
 
 Respond with ONLY valid JSON in this exact format:
 {
@@ -178,30 +186,47 @@ function generateRuleBasedStrategy(
   const hero = scored[0];
   const isVertical = ['instagram-story', 'tiktok', 'youtube-shorts', 'facebook-story'].includes(targetPlatform);
 
+  const compositions: Array<FocusSegment['composition']> = isVertical
+    ? ['center', 'center', 'top_center', 'center']
+    : ['rule_of_thirds_left', 'center', 'rule_of_thirds_right', 'center'];
+
   const segments: FocusSegment[] = [];
   const segmentDuration = 3;
+  let lastSubjectClass = '';
 
   for (let t = 0; t < videoDuration; t += segmentDuration) {
     const segEnd = Math.min(t + segmentDuration, videoDuration);
 
-    // Find which scored subjects are active in this time window
     const activeSubjects = scored.filter(s => s.first_seen <= segEnd && s.last_seen >= t);
-    const activeHero = activeSubjects[0] || hero;
+
+    let target: typeof scored[0];
+    if (activeSubjects.length > 1 && lastSubjectClass === activeSubjects[0].class) {
+      target = activeSubjects[1];
+    } else {
+      target = activeSubjects[0] || hero;
+    }
+
+    const switchedSubject = target.class !== lastSubjectClass && lastSubjectClass !== '';
+    const compIndex = segments.length % compositions.length;
 
     segments.push({
       time_start: t,
       time_end: segEnd,
-      follow_subject: activeHero.class,
-      composition: activeSubjects.length > 1 ? 'center' : (isVertical ? 'center' : 'rule_of_thirds_left'),
-      offset_x: isVertical ? 0 : (activeSubjects.length > 1 ? 0 : 10),
-      offset_y: activeHero.class === 'person' ? -5 : 0, // headroom for people
-      transition: t === 0 ? 'hard_cut' : 'smooth_pan',
-      reason: `Following ${activeHero.class}${activeSubjects.length > 1 ? ` (${activeSubjects.length} subjects)` : ''}`,
+      follow_subject: target.class,
+      composition: activeSubjects.length > 1 ? compositions[compIndex] : (isVertical ? 'center' : compositions[compIndex]),
+      offset_x: isVertical ? 0 : (compositions[compIndex] === 'rule_of_thirds_right' ? 15 : compositions[compIndex] === 'rule_of_thirds_left' ? -15 : 0),
+      offset_y: target.class === 'person' ? -5 : 0,
+      transition: t === 0 || switchedSubject ? 'hard_cut' : 'smooth_pan',
+      reason: `Following ${target.class}${activeSubjects.length > 1 ? ` (${activeSubjects.length} active)` : ''}${switchedSubject ? ' — subject switch' : ''}`,
     });
+
+    lastSubjectClass = target.class;
   }
+
+  const uniqueSubjectsUsed = new Set(segments.map(s => s.follow_subject)).size;
 
   return {
     segments,
-    reasoning: `Hero subject: ${hero.class} (${hero.position_count} detections). ${scored.length > 1 ? `${scored.length - 1} secondary subjects.` : 'Solo subject.'} ${isVertical ? 'Vertical' : 'Landscape'} framing for ${targetPlatform}.`,
+    reasoning: `Hero subject: ${hero.class} (${hero.position_count} detections). ${scored.length > 1 ? `${scored.length - 1} secondary subjects.` : 'Solo subject.'} ${uniqueSubjectsUsed > 1 ? `Alternating between ${uniqueSubjectsUsed} subjects.` : ''} ${isVertical ? 'Vertical' : 'Landscape'} framing for ${targetPlatform}.`,
   };
 }

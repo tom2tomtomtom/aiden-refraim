@@ -196,13 +196,23 @@ class VideoScannerService {
         // Seek to the current time
         this.video.currentTime = time;
         
-        // Wait for the video to update its frame
+        // Wait for the video to update its frame (with timeout fallback)
         await new Promise<void>((resolve) => {
+          let resolved = false;
           const seekHandler = () => {
+            if (resolved) return;
+            resolved = true;
             this.video!.removeEventListener('seeked', seekHandler);
             resolve();
           };
           this.video!.addEventListener('seeked', seekHandler);
+          setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              this.video!.removeEventListener('seeked', seekHandler);
+              resolve();
+            }
+          }, 3000);
         });
         
         // Capture frame
