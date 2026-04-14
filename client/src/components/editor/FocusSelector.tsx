@@ -7,7 +7,7 @@ import type { Subject as ScannerSubject } from '../../services/VideoScannerServi
 import type { Subject, ScanOptions, ScanStatus } from '../../types/scan';
 import type { FocusPointCreate } from '../../types/focusPoint';
 import { segmentPositionsToFocusPoints } from '../../services/FocusInterpolationService';
-import { Sparkles, Play, Pause, PenTool, X, Star, ChevronDown, ChevronRight, BookOpen } from 'lucide-react';
+import { Sparkles, Play, Pause, PenTool, X, Star, ChevronDown, ChevronRight, BookOpen, ShieldCheck, AlertTriangle, XCircle } from 'lucide-react';
 
 const PLATFORM_ASPECT_RATIOS: Record<string, [number, number]> = {
   'tiktok': [9, 16],
@@ -301,6 +301,15 @@ export default function FocusSelector() {
   const [annotationLabel, setAnnotationLabel] = useState('');
   const [annotationKeyMoment, setAnnotationKeyMoment] = useState(true);
   const annotationOverlayRef = useRef<HTMLDivElement>(null);
+
+  // Crop QA review state
+  const [cropReviews, setCropReviews] = useState<Array<{
+    time: number;
+    quality: 'good' | 'needs_adjustment' | 'bad';
+    issues: string[];
+    suggestion: string;
+  }> | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
 
   // Scan options (local)
   const [scanOptions, setScanOptions] = useState<ScanOptions>({
@@ -748,6 +757,110 @@ export default function FocusSelector() {
       setAiLoading(false);
     }
   }, [api, videoId, detectedSubjects, duration, targetPlatform, storyBrief, annotations, keyFrames]);
+
+  const runCropReview = useCallback(async () => {
+    if (!api || !videoId || !aiStrategy || aiStrategy.segments.length === 0) return;
+
+    const video = videoElementRef.current;
+    if (!video) return;
+
+    setReviewLoading(true);
+    setCropReviews(null);
+    setError(null);
+
+    try {
+      const [ratioW, ratioH] = PLATFORM_ASPECT_RATIOS[targetPlatform] || [9, 16];
+
+      const cropCanvas = document.createElement('canvas');
+      const cropWidth = 480;
+      const cropHeight = Math.round(cropWidth / (ratioW / ratioH));
+      cropCanvas.width = cropWidth;
+      cropCanvas.height = cropHeight;
+      const cropCtx = cropCanvas.getContext('2d');
+      if (!cropCtx) throw new Error('Could not create canvas');
+
+      const wasPlaying = !video.paused;
+      if (wasPlaying) video.pause();
+
+      const cropsToSend: Array<{
+        time: number;
+        imageBase64: string;
+        description: string;
+        ratio: string;
+      }> = [];
+
+      // Capture the cropped frame for each segment at its midpoint
+      for (const seg of aiStrategy.segments) {
+        const midTime = (seg.time_start + seg.time_end) / 2;
+
+        video.currentTime = midTime;
+        await new Promise<void>(resolve => {
+          const onSeeked = () => { video.removeEventListener('seeked', onSeeked); resolve(); };
+          video.addEventListener('seeked', onSeeked);
+          setTimeout(() => { video.removeEventListener('seeked', onSeeked); resolve(); }, 1500);
+        });
+
+        // Compute crop region from focus position
+        const subject = detectedSubjects.find(s => s.class === seg.follow_subject);
+        let focusX = 50 + (seg.offset_x || 0);
+        let focusY = 50 + (seg.offset_y || 0);
+
+        if (subject) {
+          const positions = subject.positions.filter(
+            p => p.time >= seg.time_start && p.time <= seg.time_end
+          );
+          const pool = positions.length > 0 ? positions : subject.positions;
+          if (pool.length > 0) {
+            focusX = pool.reduce((s, p) => s + p.bbox[0] + p.bbox[2] / 2, 0) / pool.length + (seg.offset_x || 0);
+            focusY = pool.reduce((s, p) => s + p.bbox[1] + p.bbox[3] / 2, 0) / pool.length + (seg.offset_y || 0);
+            const avgH = pool.reduce((s, p) => s + p.bbox[3], 0) / pool.length;
+            if (subject.class === 'person') focusY -= avgH * 0.2;
+          }
+        }
+
+        focusX = Math.max(0, Math.min(100, focusX));
+        focusY = Math.max(0, Math.min(100, focusY));
+
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        const targetAspect = ratioW / ratioH;
+        const videoAspect = vw / vh;
+
+        let srcW: number, srcH: number;
+        if (targetAspect < videoAspect) {
+          srcH = vh;
+          srcW = vh * targetAspect;
+        } else {
+          srcW = vw;
+          srcH = vw / targetAspect;
+        }
+
+        const centerX = (focusX / 100) * vw;
+        const centerY = (focusY / 100) * vh;
+        let srcX = Math.max(0, Math.min(vw - srcW, centerX - srcW / 2));
+        let srcY = Math.max(0, Math.min(vh - srcH, centerY - srcH / 2));
+
+        cropCtx.clearRect(0, 0, cropWidth, cropHeight);
+        cropCtx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, cropWidth, cropHeight);
+
+        cropsToSend.push({
+          time: midTime,
+          imageBase64: cropCanvas.toDataURL('image/jpeg', 0.85),
+          description: `${seg.follow_subject} — ${seg.composition}`,
+          ratio: `${ratioW}:${ratioH}`,
+        });
+      }
+
+      if (wasPlaying) video.play();
+
+      const result = await api.reviewCrops(videoId, cropsToSend, targetPlatform);
+      setCropReviews(result.reviews);
+    } catch (err) {
+      setError('Crop review failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setReviewLoading(false);
+    }
+  }, [api, videoId, aiStrategy, videoElementRef, targetPlatform, detectedSubjects]);
 
   const applyAIStrategy = useCallback(async () => {
     if (!aiStrategy) return;
@@ -1332,13 +1445,91 @@ export default function FocusSelector() {
                     ))}
                   </div>
 
-                  <button
-                    onClick={applyAIStrategy}
-                    className="w-full px-3 py-2 bg-orange-accent text-white text-xs font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all flex items-center justify-center gap-2"
-                  >
-                    <Sparkles className="w-3 h-3" />
-                    Apply AI Strategy ({aiStrategy.segments.length} segments)
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={applyAIStrategy}
+                      className="flex-1 px-3 py-2 bg-orange-accent text-white text-xs font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all flex items-center justify-center gap-2"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      Apply ({aiStrategy.segments.length} segments)
+                    </button>
+                    <button
+                      onClick={runCropReview}
+                      disabled={reviewLoading}
+                      className="px-3 py-2 bg-black-card text-white text-xs font-bold uppercase tracking-wide border-2 border-green-500 hover:bg-green-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                    >
+                      <ShieldCheck className="w-3 h-3 text-green-500" />
+                      {reviewLoading ? 'Reviewing...' : 'QA Review'}
+                    </button>
+                  </div>
+
+                  {/* Crop QA Review Results */}
+                  {reviewLoading && (
+                    <div className="p-3 bg-black-card border border-border-subtle">
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 border-2 border-green-500 border-t-transparent rounded-full animate-spin" />
+                        <span className="text-xs text-white-dim">AI is reviewing each cropped frame for composition issues...</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {cropReviews && !reviewLoading && (
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        <ShieldCheck className="w-4 h-4 text-green-500" />
+                        <span className="text-xs font-bold text-white-muted uppercase tracking-wide">Crop QA Results</span>
+                        <span className="ml-auto text-[10px] text-white-dim">
+                          {cropReviews.filter(r => r.quality === 'good').length}/{cropReviews.length} passed
+                        </span>
+                      </div>
+                      {cropReviews.map((review, idx) => {
+                        const seg = aiStrategy.segments[idx];
+                        const qualityConfig = {
+                          good: { icon: ShieldCheck, color: 'text-green-500', border: 'border-green-500/30', bg: 'bg-green-500/5', label: 'Good' },
+                          needs_adjustment: { icon: AlertTriangle, color: 'text-yellow-500', border: 'border-yellow-500/30', bg: 'bg-yellow-500/5', label: 'Adjust' },
+                          bad: { icon: XCircle, color: 'text-red-hot', border: 'border-red-hot/30', bg: 'bg-red-hot/5', label: 'Bad' },
+                        }[review.quality];
+                        const Icon = qualityConfig.icon;
+                        return (
+                          <div
+                            key={idx}
+                            className={`p-2 border ${qualityConfig.border} ${qualityConfig.bg} cursor-pointer hover:brightness-125 transition-all`}
+                            onClick={() => seekToFrame(review.time)}
+                          >
+                            <div className="flex items-center gap-2">
+                              <Icon className={`w-4 h-4 ${qualityConfig.color} shrink-0`} />
+                              <span className="text-white-dim font-mono text-[10px] shrink-0">
+                                {review.time.toFixed(1)}s
+                              </span>
+                              {seg && (
+                                <span className="text-orange-accent text-[10px] font-bold uppercase truncate">
+                                  {seg.follow_subject}
+                                </span>
+                              )}
+                              <span className={`ml-auto text-[10px] font-bold uppercase ${qualityConfig.color}`}>
+                                {qualityConfig.label}
+                              </span>
+                            </div>
+                            {review.issues.length > 0 && (
+                              <div className="mt-1 ml-6 space-y-0.5">
+                                {review.issues.map((issue, i) => (
+                                  <div key={i} className="text-[10px] text-white-dim flex items-start gap-1">
+                                    <span className="text-white-dim/50 shrink-0">•</span>
+                                    <span>{issue}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {review.suggestion && (
+                              <div className="mt-1 ml-6 text-[10px] text-green-500/80 italic">
+                                {review.suggestion}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

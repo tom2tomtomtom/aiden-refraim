@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { generateFocusStrategy, SubjectInput, StoryAnnotationInput, KeyFrameInput } from '../services/aiEditorService';
+import { generateFocusStrategy, SubjectInput, StoryAnnotationInput, KeyFrameInput, reviewCrops, CropReviewInput } from '../services/aiEditorService';
 
 export const getAIFocusStrategy = async (req: Request, res: Response) => {
   try {
@@ -59,6 +59,41 @@ export const getAIFocusStrategy = async (req: Request, res: Response) => {
     console.error('Error in getAIFocusStrategy:', error);
     return res.status(500).json({
       error: 'Failed to generate AI focus strategy',
+      details: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+};
+
+export const reviewCropQuality = async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { crops, targetPlatform } = req.body;
+
+    if (!crops || !Array.isArray(crops) || crops.length === 0) {
+      return res.status(400).json({ error: 'crops array is required' });
+    }
+
+    if (!targetPlatform || typeof targetPlatform !== 'string') {
+      return res.status(400).json({ error: 'targetPlatform is required' });
+    }
+
+    const cropInputs: CropReviewInput[] = crops.map((c: any) => ({
+      time: c.time || 0,
+      imageBase64: c.imageBase64 || '',
+      description: c.description || '',
+      ratio: c.ratio || '9:16',
+    }));
+
+    const reviews = await reviewCrops(cropInputs, targetPlatform);
+    return res.json({ reviews });
+  } catch (error) {
+    console.error('Error in reviewCropQuality:', error);
+    return res.status(500).json({
+      error: 'Failed to review crops',
       details: error instanceof Error ? error.message : 'Unknown error',
     });
   }

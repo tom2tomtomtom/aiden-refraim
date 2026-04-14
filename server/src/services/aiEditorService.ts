@@ -417,3 +417,130 @@ function generateRuleBasedStrategy(
     reasoning: `Hero subject: ${hero.class} (${hero.position_count} detections). ${scored.length > 1 ? `${scored.length - 1} secondary subjects.` : 'Solo subject.'} ${uniqueSubjectsUsed > 1 ? `Alternating between ${uniqueSubjectsUsed} subjects.` : ''} ${isVertical ? 'Vertical' : 'Landscape'} framing for ${targetPlatform}.`,
   };
 }
+
+// --- Crop QA Review ---
+
+export interface CropReviewInput {
+  time: number;
+  imageBase64: string;
+  description: string;
+  ratio: string;
+}
+
+export interface CropReviewResult {
+  time: number;
+  quality: 'good' | 'needs_adjustment' | 'bad';
+  issues: string[];
+  suggestion: string;
+}
+
+export async function reviewCrops(
+  crops: CropReviewInput[],
+  targetPlatform: string,
+): Promise<CropReviewResult[]> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return crops.map(c => ({ time: c.time, quality: 'good' as const, issues: [], suggestion: '' }));
+  }
+
+  const imageContent = crops.map((crop, i) => {
+    const base64Data = crop.imageBase64.replace(/^data:image\/[^;]+;base64,/, '');
+    return [
+      {
+        type: 'text' as const,
+        text: `Crop ${i + 1} at ${crop.time.toFixed(1)}s — ${crop.ratio} for ${targetPlatform}. Focus point: "${crop.description}"`,
+      },
+      {
+        type: 'image' as const,
+        source: {
+          type: 'base64' as const,
+          media_type: 'image/jpeg' as const,
+          data: base64Data,
+        },
+      },
+    ];
+  }).flat();
+
+  try {
+    const response = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 2000,
+        messages: [{
+          role: 'user',
+          content: [
+            ...imageContent,
+            {
+              type: 'text',
+              text: `You are a video editor reviewing cropped frames. Each image above is how a frame will look after being cropped to ${crops[0]?.ratio || '9:16'} for ${targetPlatform}.
+
+For each crop, evaluate the COMPOSITION QUALITY of what you see in the actual image:
+
+CHECK FOR:
+1. FACES: Is any person's face cut off at the edge? Is the face partially out of frame?
+2. SUBJECT POSITION: Is the main subject awkwardly jammed against an edge?
+3. HEADROOM: For people — is there reasonable space above their head, or is it cropped too tight?
+4. KEY ELEMENTS: Are important elements (text, products, key props) cut off or missing?
+5. BALANCE: Does the crop look intentionally composed, or accidental/awkward?
+
+Rate each crop:
+- "good": Well composed, subject properly framed
+- "needs_adjustment": Minor issues — subject slightly off-center or edge-clipped
+- "bad": Major issue — face cut off, subject barely visible, or key element missing
+
+Respond with ONLY valid JSON:
+{
+  "reviews": [
+    {
+      "crop": 1,
+      "time": 0.0,
+      "quality": "good",
+      "issues": [],
+      "suggestion": ""
+    },
+    {
+      "crop": 2,
+      "time": 3.0,
+      "quality": "needs_adjustment",
+      "issues": ["Person's face cut off on left edge"],
+      "suggestion": "Shift crop window right to fully include face"
+    }
+  ]
+}`,
+            },
+          ],
+        }],
+      },
+      {
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        timeout: 45000,
+      }
+    );
+
+    const text = response.data.content[0]?.text || '';
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return crops.map(c => ({ time: c.time, quality: 'good' as const, issues: [], suggestion: '' }));
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!parsed.reviews || !Array.isArray(parsed.reviews)) {
+      return crops.map(c => ({ time: c.time, quality: 'good' as const, issues: [], suggestion: '' }));
+    }
+
+    return parsed.reviews.map((r: any, i: number) => ({
+      time: r.time ?? crops[i]?.time ?? 0,
+      quality: ['good', 'needs_adjustment', 'bad'].includes(r.quality) ? r.quality : 'good',
+      issues: Array.isArray(r.issues) ? r.issues : [],
+      suggestion: r.suggestion || '',
+    }));
+  } catch (error) {
+    console.error('Crop review API call failed:', error);
+    return crops.map(c => ({ time: c.time, quality: 'good' as const, issues: [], suggestion: '' }));
+  }
+}

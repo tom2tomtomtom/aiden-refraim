@@ -306,4 +306,27 @@ export class ApiClient {
       }),
     });
   }
+
+  async reviewCrops(
+    videoId: string,
+    crops: Array<{
+      time: number;
+      imageBase64: string;
+      description: string;
+      ratio: string;
+    }>,
+    targetPlatform: string,
+  ): Promise<{
+    reviews: Array<{
+      time: number;
+      quality: 'good' | 'needs_adjustment' | 'bad';
+      issues: string[];
+      suggestion: string;
+    }>;
+  }> {
+    return this.request(`/videos/${videoId}/review-crops`, {
+      method: 'POST',
+      body: JSON.stringify({ crops, targetPlatform }),
+    });
+  }
 }
