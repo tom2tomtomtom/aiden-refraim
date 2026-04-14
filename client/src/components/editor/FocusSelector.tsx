@@ -1137,15 +1137,24 @@ export default function FocusSelector() {
     const vh = video.videoHeight || 1080;
     const targetAspect = rW / rH;
 
-    // Base crop: smallest region that fills the target aspect ratio
+    // Base crop: smallest region that fills the target aspect ratio (tightest crop)
     let baseSrcW: number, baseSrcH: number;
     if (targetAspect < vw / vh) { baseSrcH = vh; baseSrcW = vh * targetAspect; }
     else { baseSrcW = vw; baseSrcH = vw / targetAspect; }
 
-    // Apply zoom: zoom=100 means base crop, zoom=50 means half the base (zoomed in 2x)
-    const zoomFactor = Math.max(0.1, zoom / 100);
-    const srcW = baseSrcW * zoomFactor;
-    const srcH = baseSrcH * zoomFactor;
+    // Max crop: largest region that fits within the video (most zoomed out)
+    let maxSrcW: number, maxSrcH: number;
+    if (targetAspect < vw / vh) { maxSrcW = vw; maxSrcH = vw / targetAspect; }
+    else { maxSrcH = vh; maxSrcW = vh * targetAspect; }
+    maxSrcW = Math.min(maxSrcW, vw);
+    maxSrcH = Math.min(maxSrcH, vh);
+
+    // zoom slider: 50=base tight crop, 0=max zoom in, 100=max zoom out
+    const t01 = Math.max(0, Math.min(100, zoom)) / 100;
+    const minW = baseSrcW * 0.2;
+    const minH = baseSrcH * 0.2;
+    const srcW = minW + t01 * (maxSrcW - minW);
+    const srcH = minH + t01 * (maxSrcH - minH);
 
     // Pan: position the crop window. panX=0 → left, 50 → center, 100 → right
     const maxOffsetX = vw - srcW;
@@ -1789,11 +1798,11 @@ export default function FocusSelector() {
                           </div>
                           <div>
                             <div className="flex items-center justify-between">
-                              <label className="text-[10px] text-white-dim uppercase">Zoom</label>
+                              <label className="text-[10px] text-white-dim uppercase">Zoom (in ← → out)</label>
                               <span className="text-[10px] text-white-dim font-mono">{editW.toFixed(0)}%</span>
                             </div>
                             <input
-                              type="range" min={10} max={100} step={1}
+                              type="range" min={0} max={100} step={1}
                               value={editW}
                               onChange={e => handleScrubSlider('width', parseFloat(e.target.value))}
                               className="w-full h-2 accent-orange-accent cursor-pointer"
