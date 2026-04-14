@@ -3,6 +3,7 @@ import { processVideoForPlatforms } from '../services/videoProcessingService';
 import { StorageService } from '../services/storageService';
 import { DatabaseService } from '../services/databaseService';
 import { supabase } from '../config/supabase';
+import { checkTokens, deductTokens } from '../lib/gateway-tokens';
 
 export const uploadVideo = async (req: Request, res: Response) => {
   console.log('Starting video upload process');
@@ -172,6 +173,18 @@ export const processVideo = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
+    // Gate on token balance before starting processing
+    if (process.env.AIDEN_SERVICE_KEY) {
+      const tokenCheck = await checkTokens(user.id, 'refraim', 'video_export');
+      if (!tokenCheck.allowed) {
+        return res.status(402).json({
+          error: 'Insufficient tokens',
+          required: tokenCheck.required,
+          balance: tokenCheck.balance,
+        });
+      }
+    }
+
     const processingJob = await DatabaseService.createProcessingJob({
       video_id: id,
       platforms,
@@ -179,6 +192,13 @@ export const processVideo = async (req: Request, res: Response) => {
       progress: 0,
       user_id: user.id
     });
+
+    // Deduct tokens after successfully initiating the job
+    if (process.env.AIDEN_SERVICE_KEY) {
+      deductTokens(user.id, 'refraim', 'video_export').catch((err: Error) =>
+        console.error('[gateway-tokens] Deduct error:', err)
+      );
+    }
 
     // Start processing asynchronously
     processVideoForPlatforms(video, platforms).catch(console.error);
