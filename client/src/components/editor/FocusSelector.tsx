@@ -1102,7 +1102,6 @@ export default function FocusSelector() {
     const video = videoElementRef.current;
     const canvas = scrubCropCanvasRef.current;
     if (!video || !canvas) return;
-    if (video.readyState < 2) return;
 
     const [rW, rH] = PLATFORM_ASPECT_RATIOS[targetPlatform] || [9, 16];
     const cW = 240;
@@ -1112,30 +1111,48 @@ export default function FocusSelector() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Show placeholder if video not ready
+    if (video.readyState < 2) {
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillRect(0, 0, cW, cH);
+      ctx.fillStyle = '#666';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Loading video...', cW / 2, cH / 2);
+      return;
+    }
+
     const t = video.currentTime;
     const activeFp = focusPoints.find(fp => t >= fp.time_start && t < fp.time_end);
 
     // Use local slider overrides if they match the active focus point
     const useLocal = scrubEditLocal && activeFp && scrubEditLocal.id === activeFp.id;
-    const fpX = useLocal ? scrubEditLocal.x : activeFp?.x;
-    const fpY = useLocal ? scrubEditLocal.y : activeFp?.y;
-    const fpW = useLocal ? scrubEditLocal.width : activeFp?.width;
-    const fpH = useLocal ? scrubEditLocal.height : activeFp?.height;
-
-    const focusX = activeFp ? (fpX! + fpW! / 2) : 50;
-    const focusY = activeFp ? (fpY! + fpH! / 2) : 50;
+    // panX: 0=left edge, 50=center, 100=right edge
+    const panX = useLocal ? scrubEditLocal.x : (activeFp?.x ?? 50);
+    const panY = useLocal ? scrubEditLocal.y : (activeFp?.y ?? 50);
+    // zoom: 100=full frame (no zoom), 10=very zoomed in
+    const zoom = useLocal ? scrubEditLocal.width : (activeFp?.width ?? 100);
 
     const vw = video.videoWidth || 1920;
     const vh = video.videoHeight || 1080;
     const targetAspect = rW / rH;
-    let srcW: number, srcH: number;
-    if (targetAspect < vw / vh) { srcH = vh; srcW = vh * targetAspect; }
-    else { srcW = vw; srcH = vw / targetAspect; }
 
-    const cx = (focusX / 100) * vw;
-    const cy = (focusY / 100) * vh;
-    const srcX = Math.max(0, Math.min(vw - srcW, cx - srcW / 2));
-    const srcY = Math.max(0, Math.min(vh - srcH, cy - srcH / 2));
+    // Base crop: smallest region that fills the target aspect ratio
+    let baseSrcW: number, baseSrcH: number;
+    if (targetAspect < vw / vh) { baseSrcH = vh; baseSrcW = vh * targetAspect; }
+    else { baseSrcW = vw; baseSrcH = vw / targetAspect; }
+
+    // Apply zoom: zoom=100 means base crop, zoom=50 means half the base (zoomed in 2x)
+    const zoomFactor = Math.max(0.1, zoom / 100);
+    const srcW = baseSrcW * zoomFactor;
+    const srcH = baseSrcH * zoomFactor;
+
+    // Pan: position the crop window. panX=0 → left, 50 → center, 100 → right
+    const maxOffsetX = vw - srcW;
+    const maxOffsetY = vh - srcH;
+    const srcX = Math.max(0, Math.min(maxOffsetX, (panX / 100) * maxOffsetX));
+    const srcY = Math.max(0, Math.min(maxOffsetY, (panY / 100) * maxOffsetY));
+
     ctx.clearRect(0, 0, cW, cH);
     ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, cW, cH);
   }, [videoElementRef, focusPoints, targetPlatform, scrubEditLocal]);
