@@ -266,7 +266,7 @@ function AIReframePreview({
 
 export default function FocusSelector() {
   const { videoId, videoElementRef, duration } = useVideo();
-  const { focusPoints, addFocusPointsBatch, removeAllFocusPoints } = useFocusPoints();
+  const { focusPoints, addFocusPointsBatch, removeAllFocusPoints, updateFocusPoint } = useFocusPoints();
   const { api } = useApi();
 
   // Local scan state
@@ -1613,41 +1613,95 @@ export default function FocusSelector() {
                     />
                   </div>
 
-                  {/* Add keyframe button */}
-                  <button
-                    onClick={async () => {
-                      const video = videoElementRef.current;
-                      if (!video || !videoId) return;
-                      const t = video.currentTime;
-                      const existing = focusPoints.find(fp => t >= fp.time_start && t < fp.time_end);
-                      if (existing) return;
-
-                      const before = focusPoints.filter(fp => fp.time_end <= t).sort((a, b) => b.time_end - a.time_end)[0];
-                      const after = focusPoints.filter(fp => fp.time_start > t).sort((a, b) => a.time_start - b.time_start)[0];
-                      const gapStart = before ? before.time_end : 0;
-                      const gapEnd = after ? after.time_start : duration;
-
-                      const newPoint: FocusPointCreate = {
-                        time_start: gapStart,
-                        time_end: gapEnd,
-                        x: 25,
-                        y: 25,
-                        width: 50,
-                        height: 50,
-                        description: `manual_${formatTime(t)}`,
-                        source: 'manual',
-                      };
-                      await addFocusPointsBatch([newPoint]);
-                    }}
-                    disabled={!!focusPoints.find(fp => scrubTime >= fp.time_start && scrubTime < fp.time_end)}
-                    className="w-full px-3 py-2 text-[10px] font-bold uppercase text-white bg-orange-accent border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-1"
-                  >
-                    <PenTool className="w-3 h-3" />
-                    {focusPoints.find(fp => scrubTime >= fp.time_start && scrubTime < fp.time_end)
-                      ? 'Keyframe exists here'
-                      : 'Add Keyframe for this gap'
+                  {/* Reposition existing keyframe OR add new one */}
+                  {(() => {
+                    const activeFpForEdit = focusPoints.find(fp => scrubTime >= fp.time_start && scrubTime < fp.time_end);
+                    if (activeFpForEdit) {
+                      return (
+                        <div className="space-y-1.5 p-2 bg-black-deep border border-orange-accent">
+                          <div className="flex items-center gap-2">
+                            <Move className="w-3 h-3 text-orange-accent" />
+                            <span className="text-[10px] font-bold uppercase text-orange-accent">Reposition this frame</span>
+                          </div>
+                          <div>
+                            <div className="flex items-center justify-between">
+                              <label className="text-[10px] text-white-dim uppercase">X offset</label>
+                              <span className="text-[10px] text-white-dim font-mono">{activeFpForEdit.x.toFixed(0)}%</span>
+                            </div>
+                            <input
+                              type="range" min={0} max={100} step={1}
+                              value={activeFpForEdit.x}
+                              onChange={e => {
+                                const val = parseFloat(e.target.value);
+                                updateFocusPoint(activeFpForEdit.id, { x: val });
+                              }}
+                              className="w-full h-1.5 accent-orange-accent cursor-pointer"
+                            />
+                          </div>
+                          <div>
+                            <div className="flex items-center justify-between">
+                              <label className="text-[10px] text-white-dim uppercase">Y offset</label>
+                              <span className="text-[10px] text-white-dim font-mono">{activeFpForEdit.y.toFixed(0)}%</span>
+                            </div>
+                            <input
+                              type="range" min={0} max={100} step={1}
+                              value={activeFpForEdit.y}
+                              onChange={e => {
+                                const val = parseFloat(e.target.value);
+                                updateFocusPoint(activeFpForEdit.id, { y: val });
+                              }}
+                              className="w-full h-1.5 accent-orange-accent cursor-pointer"
+                            />
+                          </div>
+                          <div>
+                            <div className="flex items-center justify-between">
+                              <label className="text-[10px] text-white-dim uppercase">Zoom (width)</label>
+                              <span className="text-[10px] text-white-dim font-mono">{activeFpForEdit.width.toFixed(0)}%</span>
+                            </div>
+                            <input
+                              type="range" min={10} max={100} step={1}
+                              value={activeFpForEdit.width}
+                              onChange={e => {
+                                const val = parseFloat(e.target.value);
+                                updateFocusPoint(activeFpForEdit.id, { width: val, height: val });
+                              }}
+                              className="w-full h-1.5 accent-orange-accent cursor-pointer"
+                            />
+                          </div>
+                        </div>
+                      );
                     }
-                  </button>
+                    return (
+                      <button
+                        onClick={async () => {
+                          const video = videoElementRef.current;
+                          if (!video || !videoId) return;
+                          const t = video.currentTime;
+
+                          const before = focusPoints.filter(fp => fp.time_end <= t).sort((a, b) => b.time_end - a.time_end)[0];
+                          const after = focusPoints.filter(fp => fp.time_start > t).sort((a, b) => a.time_start - b.time_start)[0];
+                          const gapStart = before ? before.time_end : 0;
+                          const gapEnd = after ? after.time_start : duration;
+
+                          const newPoint: FocusPointCreate = {
+                            time_start: gapStart,
+                            time_end: gapEnd,
+                            x: 25,
+                            y: 25,
+                            width: 50,
+                            height: 50,
+                            description: `manual_${formatTime(t)}`,
+                            source: 'manual',
+                          };
+                          await addFocusPointsBatch([newPoint]);
+                        }}
+                        className="w-full px-3 py-2 text-[10px] font-bold uppercase text-white bg-orange-accent border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all flex items-center justify-center gap-1"
+                      >
+                        <PenTool className="w-3 h-3" />
+                        Add Keyframe for this gap
+                      </button>
+                    );
+                  })()}
 
                   {/* Fill all gaps shortcut */}
                   {(() => {
