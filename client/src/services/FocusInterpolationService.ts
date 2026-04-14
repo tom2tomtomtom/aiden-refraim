@@ -114,9 +114,12 @@ export function getSmartFocusPosition(
 ): InterpolatedPosition | null {
   if (focusPoints.length === 0) return null;
 
+  const validPoints = focusPoints.filter(fp => fp && fp.description);
+  if (validPoints.length === 0) return null;
+
   // Group by subject description
   const subjectGroups = new Map<string, FocusPoint[]>();
-  for (const fp of focusPoints) {
+  for (const fp of validPoints) {
     const key = fp.description;
     if (!subjectGroups.has(key)) subjectGroups.set(key, []);
     subjectGroups.get(key)!.push(fp);

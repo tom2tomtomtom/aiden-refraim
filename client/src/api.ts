@@ -168,7 +168,8 @@ export class ApiClient {
   // Focus Points
   async getFocusPoints(videoId: string): Promise<FocusPoint[]> {
     const data = await this.request<FocusPoint[] | { focus_points: FocusPoint[] }>(`/videos/${videoId}/focus-points`);
-    return Array.isArray(data) ? data : (data.focus_points || []);
+    const raw = Array.isArray(data) ? data : (data.focus_points || []);
+    return raw.map(fp => ({ ...fp, description: fp.description || 'untitled' }));
   }
 
   async createFocusPoints(videoId: string, points: FocusPointCreate[]): Promise<FocusPoint[]> {
@@ -176,7 +177,8 @@ export class ApiClient {
       method: 'POST',
       body: JSON.stringify({ focus_points: points }),
     });
-    return Array.isArray(data) ? data : (data.focus_points || []);
+    const raw = Array.isArray(data) ? data : (data.focus_points || []);
+    return raw.map(fp => ({ ...fp, description: fp.description || 'untitled' }));
   }
 
   async updateFocusPoint(videoId: string, pointId: string, updates: Partial<FocusPointCreate>): Promise<FocusPoint> {
@@ -184,7 +186,7 @@ export class ApiClient {
       method: 'PUT',
       body: JSON.stringify(updates),
     });
-    return data.focus_point;
+    return { ...data.focus_point, description: data.focus_point.description || 'untitled' };
   }
 
   async deleteFocusPoint(videoId: string, pointId: string): Promise<void> {
