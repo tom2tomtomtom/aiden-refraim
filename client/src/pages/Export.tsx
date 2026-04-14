@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useVideo } from '../contexts/VideoContext';
 import { useFocusPoints } from '../contexts/FocusPointsContext';
@@ -13,17 +13,10 @@ const UNIQUE_RATIOS = [
   { label: '16:9', w: 16, h: 9, desc: 'YouTube / Landscape' },
 ];
 
-function parseCompositionMode(description?: string): 'crop' | 'fit' | 'letterbox' {
-  if (!description) return 'crop';
-  const match = description.match(/\[(fit|letterbox|crop)\]/);
-  return (match?.[1] as 'crop' | 'fit' | 'letterbox') || 'crop';
-}
-
 function ReframePreview({ ratioW, ratioH, label }: { ratioW: number; ratioH: number; label: string }) {
   const { videoUrl, videoElementRef, isPlaying, currentTime, setCurrentTime, setIsPlaying } = useVideo();
   const { activeFocusPoint } = useFocusPoints();
   const previewRef = useRef<HTMLVideoElement>(null);
-  const blurBgRef = useRef<HTMLVideoElement>(null);
 
   const maxWidth = 320;
   const maxHeight = 400;
@@ -37,32 +30,15 @@ function ReframePreview({ ratioW, ratioH, label }: { ratioW: number; ratioH: num
     previewW = Math.round(maxHeight * aspect);
   }
 
-  const compositionMode = useMemo(() => {
-    if (!activeFocusPoint) return 'crop' as const;
-    const explicit = parseCompositionMode(activeFocusPoint.description);
-    if (explicit !== 'crop') return explicit;
-    const sourceAspect = 16 / 9;
-    const targetAspect = aspect;
-    if (targetAspect < sourceAspect) {
-      const visibleWidthFraction = targetAspect / sourceAspect;
-      if (activeFocusPoint.width > visibleWidthFraction * 80) return 'fit' as const;
-    }
-    return 'crop' as const;
-  }, [activeFocusPoint, aspect]);
-
   useEffect(() => {
     const main = videoElementRef.current;
     const preview = previewRef.current;
-    const blur = blurBgRef.current;
-    if (!main || (!preview && !blur)) return;
+    if (!main || !preview) return;
 
     let raf: number;
     const sync = () => {
-      if (preview && Math.abs(preview.currentTime - main.currentTime) > 0.15) {
+      if (Math.abs(preview.currentTime - main.currentTime) > 0.15) {
         preview.currentTime = main.currentTime;
-      }
-      if (blur && Math.abs(blur.currentTime - main.currentTime) > 0.15) {
-        blur.currentTime = main.currentTime;
       }
       raf = requestAnimationFrame(sync);
     };
@@ -71,10 +47,10 @@ function ReframePreview({ ratioW, ratioH, label }: { ratioW: number; ratioH: num
   }, [videoElementRef, videoUrl]);
 
   useEffect(() => {
-    const previews = [previewRef.current, blurBgRef.current].filter(Boolean) as HTMLVideoElement[];
-    if (previews.length === 0) return;
-    if (isPlaying) { previews.forEach(v => v.play().catch(() => {})); }
-    else { previews.forEach(v => v.pause()); }
+    const preview = previewRef.current;
+    if (!preview) return;
+    if (isPlaying) { preview.play().catch(() => {}); }
+    else { preview.pause(); }
   }, [isPlaying]);
 
   const focusX = activeFocusPoint ? activeFocusPoint.x : 50;
@@ -88,57 +64,27 @@ function ReframePreview({ ratioW, ratioH, label }: { ratioW: number; ratioH: num
 
   return (
     <div className="relative inline-block">
-      {compositionMode !== 'crop' && (
-        <span className="absolute top-2 right-2 z-10 text-[9px] px-1.5 py-0.5 bg-blue-500/80 text-white font-bold uppercase">
-          {compositionMode === 'fit' ? 'Smart Fit' : 'Letterbox'}
-        </span>
-      )}
       <div
-        className="overflow-hidden bg-black-ink border-2 border-border-subtle relative"
+        className="overflow-hidden bg-black-ink border-2 border-border-subtle"
         style={{ width: `${previewW}px`, height: `${previewH}px` }}
       >
-        {compositionMode === 'fit' ? (
-          <>
-            <video
-              ref={blurBgRef}
-              src={videoUrl}
-              crossOrigin="anonymous"
-              className="absolute inset-0 w-full h-full"
-              style={{ objectFit: 'cover', filter: 'blur(20px) brightness(0.4)', transform: 'scale(1.2)' }}
-              muted
-              playsInline
-              preload="auto"
-            />
-            <video
-              ref={previewRef}
-              src={videoUrl}
-              crossOrigin="anonymous"
-              className="absolute inset-0 w-full h-full"
-              style={{ objectFit: 'contain' }}
-              muted
-              playsInline
-              preload="auto"
-            />
-          </>
-        ) : (
-          <video
-            ref={previewRef}
-            src={videoUrl}
-            crossOrigin="anonymous"
-            className="w-full h-full"
-            style={{
-              objectFit: compositionMode === 'letterbox' ? 'contain' : 'cover',
-              objectPosition: `${focusX}% ${focusY}%`,
-            }}
-            muted
-            playsInline
-            preload="auto"
-          />
-        )}
+        <video
+          ref={previewRef}
+          src={videoUrl}
+          crossOrigin="anonymous"
+          className="w-full h-full"
+          style={{
+            objectFit: 'cover',
+            objectPosition: `${focusX}% ${focusY}%`,
+          }}
+          muted
+          playsInline
+          preload="auto"
+        />
       </div>
       <button
         onClick={togglePlay}
-        className="absolute bottom-2 left-2 bg-black/70 p-1.5 border border-border-subtle hover:bg-black/90 transition-colors z-10"
+        className="absolute bottom-2 left-2 bg-black/70 p-1.5 border border-border-subtle hover:bg-black/90 transition-colors"
       >
         {isPlaying ? <Pause className="w-3 h-3 text-white" /> : <Play className="w-3 h-3 text-white" />}
       </button>

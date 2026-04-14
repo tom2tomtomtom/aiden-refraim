@@ -33,7 +33,6 @@ export interface FocusSegment {
   time_end: number;
   follow_subject: string;
   composition: 'center' | 'rule_of_thirds_left' | 'rule_of_thirds_right' | 'top_center' | 'bottom_center';
-  composition_mode: 'crop' | 'fit' | 'letterbox';
   offset_x: number;
   offset_y: number;
   transition: 'smooth_pan' | 'hard_cut';
@@ -145,9 +144,6 @@ export async function generateFocusStrategy(
       }
       if (!['center', 'rule_of_thirds_left', 'rule_of_thirds_right', 'top_center', 'bottom_center'].includes(seg.composition)) {
         seg.composition = 'center';
-      }
-      if (!['crop', 'fit', 'letterbox'].includes(seg.composition_mode)) {
-        seg.composition_mode = 'crop';
       }
     }
 
@@ -294,14 +290,15 @@ ${subjectList}
 
 These are COCO-SSD object detection labels. They may be wrong or misleading (e.g. "potted_plant" might be a window with rain). If user annotations or the story brief contradict these labels, trust the user.
 
-SHOT SCALE AWARENESS:
-The screen coverage % tells you how tight the framing is. When converting 16:9 landscape to 9:16 vertical, you only keep ~32% of the horizontal frame. This means:
-- EXTREME CLOSE-UP (>50% coverage): The subject already fills the frame. Cropping to 9:16 will CHOP the subject. Use composition_mode "fit" to preserve the full frame with blurred background.
-- CLOSE-UP (30-50%): Tight framing. Cropping may clip edges of the subject. Prefer "fit" mode for faces/people, "crop" only if the subject is well-centered.
-- MEDIUM SHOT (15-30%): Standard framing. "crop" works well — there's enough margin to reframe.
-- WIDE SHOT (<15%): Plenty of reframing room. Always "crop".
+SHOT SCALE AWARENESS — CRITICAL FOR VERTICAL CROPS:
+The screen coverage % tells you how tight the original framing is. When cropping 16:9 landscape to 9:16 vertical, you only keep ~32% of the horizontal frame width. Your offset_x and offset_y values MUST account for this.
 
-For faces and people in close-ups: "fit" mode preserves the intimacy without cutting off heads/chins.`);
+- EXTREME CLOSE-UP (>50% coverage): Subject fills the frame. The vertical crop will only show a narrow slice. Use offset_x to center precisely on the FACE (not body center). Use offset_y of -15 to -25 to weight toward the head. The crop will be tight — that's OK, but the face must not be cut off.
+- CLOSE-UP (30-50%): Tight but workable. Ensure offset_x centers on the subject's face/key feature. offset_y of -10 to -20 for people.
+- MEDIUM SHOT (15-30%): Good reframing room. Standard offsets work.
+- WIDE SHOT (<15%): Plenty of room. Use composition variety.
+
+KEY RULE FOR PEOPLE IN VERTICAL: The crop will be a narrow vertical slice. For people, the crop must be centered on their FACE horizontally, and weighted toward the head vertically. A person's body center is NOT where you want the crop — the FACE is what viewers look at. Use offset_y of -15 to -25 for close-ups of people.`);
 
   // Priority rules
   sections.push(`PRIORITY RULES:
@@ -316,17 +313,11 @@ For faces and people in close-ups: "fit" mode preserves the intimacy without cut
 CREATIVE DIRECTION:
 - Do NOT follow the same subject for every segment
 - Vary composition: center, rule_of_thirds_left, rule_of_thirds_right, top_center
-- Use offset_x and offset_y for precise framing (-50 to 50)
-- For person subjects: use negative offset_y (-10 to -20) to weight the focus toward the FACE, not body center
+- Use offset_x and offset_y for precise framing (-50 to 50). These are CRITICAL for close-ups in vertical crops.
+- For person subjects: ALWAYS use negative offset_y (-15 to -25) to weight the crop toward the FACE
+- For close-up person shots in vertical: use offset_x to precisely center on the face, not body midpoint
 - Segment durations: 2-4s for dynamic moments, 5-8s for establishing shots
 - If an annotated key moment exists at a timestamp, dedicate a segment to it
-
-COMPOSITION MODE (composition_mode):
-- "crop": Standard. Fill the target frame, cropping the excess. Best for medium/wide shots with room to reframe.
-- "fit": Scale the ENTIRE frame to fit inside the target ratio, with blurred background fill. Best for close-ups that would be ruined by cropping (faces being chopped, important detail lost at edges).
-- "letterbox": Scale to fit with clean black bars. Use sparingly for cinematic effect.
-
-RULE: If a person's screen coverage is >30% and the target is vertical (9:16), STRONGLY prefer "fit" mode. A chopped close-up looks amateur.
 
 Respond with ONLY valid JSON:
 {
@@ -336,9 +327,8 @@ Respond with ONLY valid JSON:
       "time_end": 5,
       "follow_subject": "person",
       "composition": "center",
-      "composition_mode": "crop",
       "offset_x": 0,
-      "offset_y": -10,
+      "offset_y": -20,
       "transition": "smooth_pan",
       "reason": "..."
     }
@@ -364,7 +354,6 @@ function generateRuleBasedStrategy(
         time_end: videoDuration,
         follow_subject: 'none',
         composition: 'center',
-        composition_mode: 'crop',
         offset_x: 0,
         offset_y: 0,
         transition: 'smooth_pan',
@@ -405,18 +394,17 @@ function generateRuleBasedStrategy(
     const compIndex = segments.length % compositions.length;
 
     const isCloseUp = target.avg_screen_coverage > 30;
-    const needsFit = isVertical && isCloseUp;
+    const personFaceOffset = target.class === 'person' ? (isCloseUp ? -25 : -15) : 0;
 
     segments.push({
       time_start: t,
       time_end: segEnd,
       follow_subject: target.class,
       composition: activeSubjects.length > 1 ? compositions[compIndex] : (isVertical ? 'center' : compositions[compIndex]),
-      composition_mode: needsFit ? 'fit' : 'crop',
       offset_x: isVertical ? 0 : (compositions[compIndex] === 'rule_of_thirds_right' ? 15 : compositions[compIndex] === 'rule_of_thirds_left' ? -15 : 0),
-      offset_y: target.class === 'person' ? -15 : 0,
+      offset_y: personFaceOffset,
       transition: t === 0 || switchedSubject ? 'hard_cut' : 'smooth_pan',
-      reason: `Following ${target.class}${needsFit ? ' (close-up → fit mode)' : ''}${activeSubjects.length > 1 ? ` (${activeSubjects.length} active)` : ''}${switchedSubject ? ' — subject switch' : ''}`,
+      reason: `Following ${target.class}${isCloseUp ? ' (close-up — face-weighted crop)' : ''}${activeSubjects.length > 1 ? ` (${activeSubjects.length} active)` : ''}${switchedSubject ? ' — subject switch' : ''}`,
     });
 
     lastSubjectClass = target.class;

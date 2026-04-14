@@ -26,7 +26,6 @@ interface AIStrategy {
     time_end: number;
     follow_subject: string;
     composition: string;
-    composition_mode: 'crop' | 'fit' | 'letterbox';
     offset_x: number;
     offset_y: number;
     transition: string;
@@ -135,22 +134,18 @@ function AIReframePreview({
     }
   }, [isPlaying]);
 
-  // Compute focus position and composition mode from AI strategy at current time
-  const { focusPosition, activeMode } = useMemo(() => {
+  // Compute focus position from AI strategy at current time (face-weighted for people)
+  const focusPosition = useMemo(() => {
     const t = currentTime;
     const activeSeg = strategy.segments.find(
       s => t >= s.time_start && t < s.time_end
     ) || strategy.segments[strategy.segments.length - 1];
 
-    if (!activeSeg) return { focusPosition: { x: 50, y: 50 }, activeMode: 'crop' as const };
+    if (!activeSeg) return { x: 50, y: 50 };
 
-    const mode = activeSeg.composition_mode || 'crop';
     const subject = detectedSubjects.find(s => s.class === activeSeg.follow_subject);
     if (!subject || subject.positions.length === 0) {
-      return {
-        focusPosition: { x: 50 + (activeSeg.offset_x || 0), y: 50 + (activeSeg.offset_y || 0) },
-        activeMode: mode,
-      };
+      return { x: 50 + (activeSeg.offset_x || 0), y: 50 + (activeSeg.offset_y || 0) };
     }
 
     const positions = subject.positions.filter(
@@ -166,11 +161,8 @@ function AIReframePreview({
     const faceOffset = isPerson ? -(avgH * 0.2) : 0;
 
     return {
-      focusPosition: {
-        x: Math.max(0, Math.min(100, avgX + (activeSeg.offset_x || 0))),
-        y: Math.max(0, Math.min(100, avgY + (activeSeg.offset_y || 0) + faceOffset)),
-      },
-      activeMode: mode,
+      x: Math.max(0, Math.min(100, avgX + (activeSeg.offset_x || 0))),
+      y: Math.max(0, Math.min(100, avgY + (activeSeg.offset_y || 0) + faceOffset)),
     };
   }, [currentTime, strategy, detectedSubjects]);
 
@@ -200,54 +192,22 @@ function AIReframePreview({
         {/* Reframed preview */}
         <div className="relative shrink-0">
           <div
-            className="overflow-hidden bg-black-ink border-2 border-orange-accent relative"
+            className="overflow-hidden bg-black-ink border-2 border-orange-accent"
             style={{ width: `${previewWidth}px`, height: `${previewHeight}px` }}
           >
-            {activeMode === 'fit' ? (
-              <>
-                {/* Blurred background layer */}
-                <video
-                  src={videoUrl}
-                  crossOrigin="anonymous"
-                  className="absolute inset-0 w-full h-full"
-                  style={{ objectFit: 'cover', filter: 'blur(20px) brightness(0.4)', transform: 'scale(1.2)' }}
-                  ref={el => {
-                    if (el && previewRef.current) {
-                      el.currentTime = previewRef.current.currentTime;
-                      if (!previewRef.current.paused) el.play().catch(() => {});
-                    }
-                  }}
-                  muted
-                  playsInline
-                  preload="auto"
-                />
-                {/* Sharp foreground layer */}
-                <video
-                  ref={previewRef}
-                  src={videoUrl}
-                  crossOrigin="anonymous"
-                  className="absolute inset-0 w-full h-full"
-                  style={{ objectFit: 'contain' }}
-                  muted
-                  playsInline
-                  preload="auto"
-                />
-              </>
-            ) : (
-              <video
-                ref={previewRef}
-                src={videoUrl}
-                crossOrigin="anonymous"
-                className="w-full h-full"
-                style={{
-                  objectFit: activeMode === 'letterbox' ? 'contain' : 'cover',
-                  objectPosition: `${focusPosition.x}% ${focusPosition.y}%`,
-                }}
-                muted
-                playsInline
-                preload="auto"
-              />
-            )}
+            <video
+              ref={previewRef}
+              src={videoUrl}
+              crossOrigin="anonymous"
+              className="w-full h-full"
+              style={{
+                objectFit: 'cover',
+                objectPosition: `${focusPosition.x}% ${focusPosition.y}%`,
+              }}
+              muted
+              playsInline
+              preload="auto"
+            />
           </div>
           <button
             onClick={togglePlay}
@@ -837,8 +797,6 @@ export default function FocusSelector() {
       const adjustedX = Math.max(0, Math.min(100 - width, baseX - width / 2 + seg.offset_x));
       const adjustedY = Math.max(0, Math.min(100 - height, baseY - height / 2 + seg.offset_y + faceOffset));
 
-      const mode = seg.composition_mode || 'crop';
-
       return {
         time_start: seg.time_start,
         time_end: seg.time_end,
@@ -846,7 +804,7 @@ export default function FocusSelector() {
         y: Math.max(0, adjustedY),
         width: Math.min(width, 100),
         height: Math.min(height, 100),
-        description: `${seg.follow_subject} (${seg.composition}) [${mode}]`,
+        description: `${seg.follow_subject} (${seg.composition})`,
         source: 'ai_detection' as const,
       };
     });
@@ -1367,11 +1325,6 @@ export default function FocusSelector() {
                         </span>
                         <span className="text-orange-accent font-bold uppercase">{seg.follow_subject}</span>
                         <span className="text-white-dim">{seg.composition}</span>
-                        {seg.composition_mode && seg.composition_mode !== 'crop' && (
-                          <span className="px-1 py-0.5 bg-blue-500/20 text-blue-400 font-bold uppercase">
-                            {seg.composition_mode}
-                          </span>
-                        )}
                         <span className={`ml-auto px-1 ${seg.transition === 'hard_cut' ? 'text-red-hot' : 'text-green-500'}`}>
                           {seg.transition === 'hard_cut' ? 'CUT' : 'PAN'}
                         </span>
