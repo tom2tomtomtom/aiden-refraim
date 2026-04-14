@@ -82,16 +82,22 @@ export default function Editor() {
 
         {/* Right: Previews */}
         <div className="space-y-4">
-          <h2 className="text-lg font-bold text-red-hot uppercase">Format Preview</h2>
-          <AspectRatioPreview ratio="9:16" width={200} />
-          <AspectRatioPreview ratio="1:1" width={200} />
-          <AspectRatioPreview ratio="4:5" width={200} />
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+            <h2 className="text-lg font-bold text-red-hot uppercase">Live Preview</h2>
+          </div>
+          <p className="text-[10px] text-white-dim uppercase tracking-wide -mt-2">
+            Shows reframe using your focus points in real time
+          </p>
+          <AspectRatioPreview ratio="9:16" width={240} />
+          <AspectRatioPreview ratio="1:1" width={240} />
+          <AspectRatioPreview ratio="4:5" width={240} />
 
           <Link
             to={`/export/${paramVideoId}`}
             className="block w-full text-center bg-red-hot text-white px-6 py-3 text-sm font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all"
           >
-            Continue to Export
+            Preview &amp; Export
           </Link>
         </div>
       </div>
