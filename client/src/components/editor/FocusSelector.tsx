@@ -1895,6 +1895,26 @@ export default function FocusSelector() {
                       );
                     })}
                   </div>
+
+                  {/* Done — view preview */}
+                  <div className="mt-3 pt-3 border-t border-border-subtle space-y-2">
+                    <button
+                      onClick={() => {
+                        const el = document.getElementById('live-preview-section');
+                        if (el) el.scrollIntoView({ behavior: 'smooth' });
+                      }}
+                      className="w-full px-4 py-3 bg-green-600 text-white text-sm font-bold uppercase tracking-wide border-2 border-green-600 hover:bg-green-500 hover:border-green-500 transition-all flex items-center justify-center gap-2"
+                    >
+                      <Play className="w-4 h-4" />
+                      Done — View Live Preview ↓
+                    </button>
+                    <a
+                      href={`/export/${videoId}`}
+                      className="w-full px-4 py-2.5 bg-red-hot text-white text-sm font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all flex items-center justify-center gap-2"
+                    >
+                      Preview & Export →
+                    </a>
+                  </div>
               </div>
             </div>
           )}
