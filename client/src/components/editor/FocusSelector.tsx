@@ -1561,88 +1561,160 @@ export default function FocusSelector() {
 
                   <p className="text-xs text-white-muted">{aiStrategy.reasoning}</p>
 
-                  <div className="max-h-80 overflow-y-auto space-y-1">
+                  {/* QA summary bar */}
+                  {cropReviews && !reviewLoading && (
+                    <div className="flex items-center gap-2 p-2 bg-black-card border border-border-subtle">
+                      <ShieldCheck className="w-4 h-4 text-green-500 shrink-0" />
+                      <span className="text-xs font-bold text-white-muted uppercase">QA:</span>
+                      <span className="text-xs text-green-500">{cropReviews.filter(r => r.quality === 'good').length} good</span>
+                      {cropReviews.some(r => r.quality === 'needs_adjustment') && (
+                        <span className="text-xs text-yellow-500">{cropReviews.filter(r => r.quality === 'needs_adjustment').length} adjust</span>
+                      )}
+                      {cropReviews.some(r => r.quality === 'bad') && (
+                        <span className="text-xs text-red-hot">{cropReviews.filter(r => r.quality === 'bad').length} bad</span>
+                      )}
+                      <span className="text-[10px] text-white-dim ml-auto">Click a segment to adjust</span>
+                    </div>
+                  )}
+
+                  {/* Unified segment list — each segment shows QA + sliders in one place */}
+                  <div className="max-h-[500px] overflow-y-auto space-y-1">
                     {aiStrategy.segments.map((seg, idx) => {
                       const review = cropReviews?.[idx];
                       const isExpanded = expandedSegIdx === idx;
+                      const hasProblem = review && review.quality !== 'good';
                       const qualityBorder = review
-                        ? review.quality === 'good' ? 'border-green-500/30' : review.quality === 'bad' ? 'border-red-hot/30' : 'border-yellow-500/30'
+                        ? review.quality === 'good' ? 'border-green-500/30' : review.quality === 'bad' ? 'border-red-hot/40' : 'border-yellow-500/40'
                         : 'border-border-subtle';
+                      const qualityBg = review
+                        ? review.quality === 'good' ? '' : review.quality === 'bad' ? 'bg-red-hot/5' : 'bg-yellow-500/5'
+                        : '';
+
                       return (
-                        <div key={idx} className={`bg-black-card border ${qualityBorder} transition-all`}>
+                        <div key={idx} className={`bg-black-card border ${qualityBorder} ${qualityBg} transition-all`}>
+                          {/* Segment header row */}
                           <div
                             className="flex items-center gap-2 text-[10px] p-2 cursor-pointer hover:bg-black-deep/50"
                             onClick={() => { setExpandedSegIdx(isExpanded ? null : idx); seekToFrame((seg.time_start + seg.time_end) / 2); }}
                           >
-                            {review && (
-                              <div className={`w-2 h-2 rounded-full shrink-0 ${
+                            {review ? (
+                              <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${
                                 review.quality === 'good' ? 'bg-green-500' : review.quality === 'bad' ? 'bg-red-hot' : 'bg-yellow-500'
                               }`} />
+                            ) : (
+                              <div className="w-2.5 h-2.5 rounded-full shrink-0 bg-border-subtle" />
                             )}
                             <span className="text-white-dim font-mono shrink-0">
-                              {seg.time_start.toFixed(1)}s-{seg.time_end.toFixed(1)}s
+                              {seg.time_start.toFixed(1)}s
                             </span>
                             <span className="text-orange-accent font-bold uppercase truncate">{seg.follow_subject}</span>
-                            <span className="text-white-dim truncate hidden sm:inline">{seg.composition}</span>
-                            <div className="ml-auto flex items-center gap-1 shrink-0">
-                              <span className="text-white-dim/50 font-mono">
-                                x:{seg.offset_x > 0 ? '+' : ''}{seg.offset_x} y:{seg.offset_y > 0 ? '+' : ''}{seg.offset_y}
-                              </span>
-                              <SlidersHorizontal className={`w-3 h-3 ${isExpanded ? 'text-orange-accent' : 'text-white-dim/30'}`} />
+                            <div className="ml-auto flex items-center gap-1.5 shrink-0">
+                              {hasProblem && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); autoFixSegment(idx); }}
+                                  className="px-2 py-0.5 text-[9px] font-bold uppercase text-black bg-yellow-500 hover:bg-yellow-400 transition-colors flex items-center gap-1"
+                                >
+                                  <Wrench className="w-2.5 h-2.5" />
+                                  Fix
+                                </button>
+                              )}
+                              <SlidersHorizontal className={`w-3.5 h-3.5 ${isExpanded ? 'text-orange-accent' : 'text-white-dim/40'}`} />
                             </div>
                           </div>
 
+                          {/* Expanded: QA issues + sliders together */}
                           {isExpanded && (
-                            <div className="px-2 pb-2 space-y-2 border-t border-border-subtle/50">
-                              <div className="pt-2">
-                                <div className="flex items-center justify-between mb-1">
-                                  <label className="text-[10px] text-white-dim uppercase tracking-wide">Offset X (horizontal)</label>
-                                  <span className="text-[10px] text-orange-accent font-mono">{seg.offset_x > 0 ? '+' : ''}{seg.offset_x}</span>
-                                </div>
-                                <input
-                                  type="range"
-                                  min={-50}
-                                  max={50}
-                                  step={1}
-                                  value={seg.offset_x}
-                                  onChange={e => updateSegmentOffset(idx, 'offset_x', parseInt(e.target.value))}
-                                  className="w-full h-1.5 accent-orange-accent"
-                                />
-                              </div>
-                              <div>
-                                <div className="flex items-center justify-between mb-1">
-                                  <label className="text-[10px] text-white-dim uppercase tracking-wide">Offset Y (vertical)</label>
-                                  <span className="text-[10px] text-orange-accent font-mono">{seg.offset_y > 0 ? '+' : ''}{seg.offset_y}</span>
-                                </div>
-                                <input
-                                  type="range"
-                                  min={-50}
-                                  max={50}
-                                  step={1}
-                                  value={seg.offset_y}
-                                  onChange={e => updateSegmentOffset(idx, 'offset_y', parseInt(e.target.value))}
-                                  className="w-full h-1.5 accent-orange-accent"
-                                />
-                              </div>
-                              <div className="flex gap-1">
-                                <button
-                                  onClick={() => updateSegmentOffset(idx, 'offset_x', 0)}
-                                  className="px-2 py-0.5 text-[9px] text-white-dim border border-border-subtle hover:border-orange-accent"
-                                  title="Reset X to 0"
-                                >
-                                  Reset X
-                                </button>
-                                <button
-                                  onClick={() => updateSegmentOffset(idx, 'offset_y', 0)}
-                                  className="px-2 py-0.5 text-[9px] text-white-dim border border-border-subtle hover:border-orange-accent"
-                                  title="Reset Y to 0"
-                                >
-                                  Reset Y
-                                </button>
-                              </div>
+                            <div className="px-3 pb-3 space-y-3 border-t border-border-subtle/50">
+                              {/* QA feedback inline */}
                               {review && review.quality !== 'good' && (
-                                <div className="text-[10px] text-yellow-500/80 italic">{review.suggestion}</div>
+                                <div className={`mt-2 p-2 border ${review.quality === 'bad' ? 'border-red-hot/30 bg-red-hot/5' : 'border-yellow-500/30 bg-yellow-500/5'}`}>
+                                  <div className="text-[10px] font-bold uppercase text-white-dim mb-1">Issues found:</div>
+                                  {review.issues.map((issue, i) => (
+                                    <div key={i} className="text-[10px] text-white-dim flex items-start gap-1">
+                                      <span className={review.quality === 'bad' ? 'text-red-hot' : 'text-yellow-500'}>•</span>
+                                      <span>{issue}</span>
+                                    </div>
+                                  ))}
+                                  {review.suggestion && (
+                                    <div className="mt-1 text-[10px] text-green-500 font-medium">
+                                      Suggestion: {review.suggestion}
+                                    </div>
+                                  )}
+                                </div>
                               )}
+
+                              {review && review.quality === 'good' && (
+                                <div className="mt-2 p-2 border border-green-500/30 bg-green-500/5">
+                                  <div className="text-[10px] text-green-500 flex items-center gap-1">
+                                    <ShieldCheck className="w-3 h-3" />
+                                    Composition looks good — no issues detected
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Offset sliders */}
+                              <div>
+                                <div className="text-[10px] font-bold uppercase text-white-dim mb-2">Adjust Crop Position</div>
+                                <div className="space-y-2">
+                                  <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                      <label className="text-[10px] text-white-dim">
+                                        Horizontal
+                                        <span className="text-white-dim/50 ml-1">(← left / right →)</span>
+                                      </label>
+                                      <span className="text-[10px] text-orange-accent font-mono font-bold">{seg.offset_x > 0 ? '+' : ''}{seg.offset_x}</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={-50}
+                                      max={50}
+                                      step={1}
+                                      value={seg.offset_x}
+                                      onChange={e => updateSegmentOffset(idx, 'offset_x', parseInt(e.target.value))}
+                                      className="w-full h-2 accent-orange-accent cursor-pointer"
+                                    />
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                      <label className="text-[10px] text-white-dim">
+                                        Vertical
+                                        <span className="text-white-dim/50 ml-1">(↑ up / down ↓)</span>
+                                      </label>
+                                      <span className="text-[10px] text-orange-accent font-mono font-bold">{seg.offset_y > 0 ? '+' : ''}{seg.offset_y}</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={-50}
+                                      max={50}
+                                      step={1}
+                                      value={seg.offset_y}
+                                      onChange={e => updateSegmentOffset(idx, 'offset_y', parseInt(e.target.value))}
+                                      className="w-full h-2 accent-orange-accent cursor-pointer"
+                                    />
+                                  </div>
+                                </div>
+                                <div className="flex gap-1 mt-2">
+                                  <button
+                                    onClick={() => { updateSegmentOffset(idx, 'offset_x', 0); updateSegmentOffset(idx, 'offset_y', 0); }}
+                                    className="px-2 py-1 text-[10px] text-white-dim border border-border-subtle hover:border-orange-accent transition-colors"
+                                  >
+                                    Reset to center
+                                  </button>
+                                  {hasProblem && (
+                                    <button
+                                      onClick={() => autoFixSegment(idx)}
+                                      className="px-2 py-1 text-[10px] font-bold text-black bg-yellow-500 hover:bg-yellow-400 transition-colors flex items-center gap-1"
+                                    >
+                                      <Wrench className="w-3 h-3" />
+                                      Auto-fix this segment
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="text-[10px] text-white-dim/50 italic">
+                                Drag sliders to adjust — the live preview above updates in real time
+                              </div>
                             </div>
                           )}
                         </div>
@@ -1650,10 +1722,11 @@ export default function FocusSelector() {
                     })}
                   </div>
 
+                  {/* Action buttons */}
                   <div className="flex gap-2">
                     <button
                       onClick={applyAIStrategy}
-                      className="flex-1 px-3 py-2 bg-orange-accent text-white text-xs font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all flex items-center justify-center gap-2"
+                      className="flex-1 px-3 py-2.5 bg-orange-accent text-white text-xs font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all flex items-center justify-center gap-2"
                     >
                       <Sparkles className="w-3 h-3" />
                       Apply ({aiStrategy.segments.length} segments)
@@ -1661,14 +1734,14 @@ export default function FocusSelector() {
                     <button
                       onClick={runCropReview}
                       disabled={reviewLoading}
-                      className="px-3 py-2 bg-black-card text-white text-xs font-bold uppercase tracking-wide border-2 border-green-500 hover:bg-green-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                      className="px-3 py-2.5 bg-black-card text-white text-xs font-bold uppercase tracking-wide border-2 border-green-500 hover:bg-green-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                     >
                       <ShieldCheck className="w-3 h-3 text-green-500" />
-                      {reviewLoading ? 'Reviewing...' : 'QA Review'}
+                      {reviewLoading ? 'Reviewing...' : cropReviews ? 'Re-check' : 'QA Review'}
                     </button>
                   </div>
 
-                  {/* Crop QA Review Results */}
+                  {/* Loading state */}
                   {reviewLoading && (
                     <div className="p-3 bg-black-card border border-border-subtle">
                       <div className="flex items-center gap-2">
@@ -1678,93 +1751,16 @@ export default function FocusSelector() {
                     </div>
                   )}
 
-                  {cropReviews && !reviewLoading && (
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <ShieldCheck className="w-4 h-4 text-green-500" />
-                        <span className="text-xs font-bold text-white-muted uppercase tracking-wide">Crop QA Results</span>
-                        <span className="ml-auto text-[10px] text-white-dim">
-                          {cropReviews.filter(r => r.quality === 'good').length}/{cropReviews.length} passed
-                        </span>
-                      </div>
-                      {cropReviews.map((review, idx) => {
-                        const seg = aiStrategy.segments[idx];
-                        const qualityConfig = {
-                          good: { icon: ShieldCheck, color: 'text-green-500', border: 'border-green-500/30', bg: 'bg-green-500/5', label: 'Good' },
-                          needs_adjustment: { icon: AlertTriangle, color: 'text-yellow-500', border: 'border-yellow-500/30', bg: 'bg-yellow-500/5', label: 'Adjust' },
-                          bad: { icon: XCircle, color: 'text-red-hot', border: 'border-red-hot/30', bg: 'bg-red-hot/5', label: 'Bad' },
-                        }[review.quality];
-                        const Icon = qualityConfig.icon;
-                        return (
-                          <div
-                            key={idx}
-                            className={`p-2 border ${qualityConfig.border} ${qualityConfig.bg} transition-all`}
-                          >
-                            <div
-                              className="flex items-center gap-2 cursor-pointer"
-                              onClick={() => seekToFrame(review.time)}
-                            >
-                              <Icon className={`w-4 h-4 ${qualityConfig.color} shrink-0`} />
-                              <span className="text-white-dim font-mono text-[10px] shrink-0">
-                                {review.time.toFixed(1)}s
-                              </span>
-                              {seg && (
-                                <span className="text-orange-accent text-[10px] font-bold uppercase truncate">
-                                  {seg.follow_subject}
-                                </span>
-                              )}
-                              <span className={`ml-auto text-[10px] font-bold uppercase ${qualityConfig.color}`}>
-                                {qualityConfig.label}
-                              </span>
-                            </div>
-                            {review.issues.length > 0 && (
-                              <div className="mt-1 ml-6 space-y-0.5">
-                                {review.issues.map((issue, i) => (
-                                  <div key={i} className="text-[10px] text-white-dim flex items-start gap-1">
-                                    <span className="text-white-dim/50 shrink-0">•</span>
-                                    <span>{issue}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                            {review.suggestion && (
-                              <div className="mt-1 ml-6 text-[10px] text-green-500/80 italic">
-                                {review.suggestion}
-                              </div>
-                            )}
-                            {review.quality !== 'good' && (
-                              <div className="mt-1.5 ml-6 flex gap-1">
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); autoFixSegment(idx); }}
-                                  className="px-2 py-0.5 text-[9px] font-bold uppercase text-white bg-yellow-600 border border-yellow-600 hover:bg-yellow-500 transition-colors flex items-center gap-1"
-                                >
-                                  <Wrench className="w-2.5 h-2.5" />
-                                  Fix It
-                                </button>
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); setExpandedSegIdx(idx); }}
-                                  className="px-2 py-0.5 text-[9px] font-bold uppercase text-white-dim border border-border-subtle hover:border-orange-accent transition-colors flex items-center gap-1"
-                                >
-                                  <SlidersHorizontal className="w-2.5 h-2.5" />
-                                  Manual
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-
-                      {cropReviews.some(r => r.quality !== 'good') && (
-                        <button
-                          onClick={regenFlaggedSegments}
-                          disabled={aiLoading}
-                          className="w-full mt-2 px-3 py-2 bg-black-card text-white text-xs font-bold uppercase tracking-wide border-2 border-yellow-500 hover:bg-yellow-500/10 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <RefreshCw className={`w-3 h-3 text-yellow-500 ${aiLoading ? 'animate-spin' : ''}`} />
-                          {aiLoading ? 'Re-generating...' : `Re-generate ${cropReviews.filter(r => r.quality !== 'good').length} Flagged Segments`}
-                        </button>
-                      )}
-                    </div>
+                  {/* Re-generate flagged button */}
+                  {cropReviews && !reviewLoading && cropReviews.some(r => r.quality !== 'good') && (
+                    <button
+                      onClick={regenFlaggedSegments}
+                      disabled={aiLoading}
+                      className="w-full px-3 py-2 bg-black-card text-white text-xs font-bold uppercase tracking-wide border-2 border-yellow-500 hover:bg-yellow-500/10 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <RefreshCw className={`w-3 h-3 text-yellow-500 ${aiLoading ? 'animate-spin' : ''}`} />
+                      {aiLoading ? 'Re-generating...' : `Re-generate ${cropReviews.filter(r => r.quality !== 'good').length} flagged with AI`}
+                    </button>
                   )}
                 </div>
               )}
