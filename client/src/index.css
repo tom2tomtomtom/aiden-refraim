@@ -57,3 +57,10 @@ input:focus, textarea:focus, select:focus {
   border-color: var(--red-hot);
   background: var(--black-deep);
 }
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 30px #0a0a0a inset !important;
+  -webkit-text-fill-color: #ffffff !important;
+}
