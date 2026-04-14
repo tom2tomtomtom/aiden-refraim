@@ -991,6 +991,7 @@ export default function FocusSelector() {
 
   // Local overrides for scrub-edit sliders (instant response, debounced save)
   const [scrubEditLocal, setScrubEditLocal] = useState<{ id: string; x: number; y: number; width: number; height: number } | null>(null);
+  const [scrubSaveStatus, setScrubSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const scrubEditTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Clear local slider overrides when scrubbing to a different point
@@ -1674,6 +1675,11 @@ export default function FocusSelector() {
                       const editX = isLocalMatch ? scrubEditLocal.x : activeFpForEdit.x;
                       const editY = isLocalMatch ? scrubEditLocal.y : activeFpForEdit.y;
                       const editW = isLocalMatch ? scrubEditLocal.width : activeFpForEdit.width;
+                      const hasUnsavedChanges = isLocalMatch && (
+                        scrubEditLocal.x !== activeFpForEdit.x ||
+                        scrubEditLocal.y !== activeFpForEdit.y ||
+                        scrubEditLocal.width !== activeFpForEdit.width
+                      );
 
                       const handleScrubSlider = (field: 'x' | 'y' | 'width', val: number) => {
                         const prev = scrubEditLocal && scrubEditLocal.id === activeFpForEdit.id
@@ -1682,11 +1688,38 @@ export default function FocusSelector() {
                         const next = { ...prev, [field]: val };
                         if (field === 'width') next.height = val;
                         setScrubEditLocal(next);
+                        setScrubSaveStatus('idle');
+                      };
 
+                      const handleSave = async () => {
+                        if (!scrubEditLocal || scrubEditLocal.id !== activeFpForEdit.id) return;
+                        setScrubSaveStatus('saving');
+                        await updateFocusPoint(activeFpForEdit.id, {
+                          x: scrubEditLocal.x,
+                          y: scrubEditLocal.y,
+                          width: scrubEditLocal.width,
+                          height: scrubEditLocal.height,
+                        });
+                        setScrubSaveStatus('saved');
+                        setScrubEditLocal(null);
                         if (scrubEditTimerRef.current) clearTimeout(scrubEditTimerRef.current);
-                        scrubEditTimerRef.current = setTimeout(() => {
-                          updateFocusPoint(activeFpForEdit.id, { [field]: val, ...(field === 'width' ? { height: val } : {}) });
-                        }, 300);
+                        scrubEditTimerRef.current = setTimeout(() => setScrubSaveStatus('idle'), 2000);
+                      };
+
+                      const handleSaveAndNext = async (nextFpToGo: typeof activeFpForEdit) => {
+                        if (hasUnsavedChanges && scrubEditLocal) {
+                          setScrubSaveStatus('saving');
+                          await updateFocusPoint(activeFpForEdit.id, {
+                            x: scrubEditLocal.x,
+                            y: scrubEditLocal.y,
+                            width: scrubEditLocal.width,
+                            height: scrubEditLocal.height,
+                          });
+                          setScrubEditLocal(null);
+                        }
+                        setScrubSaveStatus('idle');
+                        seekToFrame(nextFpToGo.time_start);
+                        setScrubTime(nextFpToGo.time_start);
                       };
 
                       const sortedFps = [...focusPoints].sort((a, b) => a.time_start - b.time_start);
@@ -1699,12 +1732,19 @@ export default function FocusSelector() {
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
                               <Move className="w-3 h-3 text-orange-accent" />
-                              <span className="text-[10px] font-bold uppercase text-orange-accent">Reposition this frame</span>
+                              <span className="text-[10px] font-bold uppercase text-orange-accent">
+                                Reposition frame {currentIdx + 1}/{sortedFps.length}
+                              </span>
                             </div>
-                            <span className="text-[9px] text-green-500 uppercase">Auto-saving</span>
-                          </div>
-                          <div className="text-[9px] text-white-dim">
-                            Drag sliders to adjust crop — preview updates live
+                            {scrubSaveStatus === 'saved' && (
+                              <span className="text-[10px] text-green-500 font-bold uppercase">✓ Saved</span>
+                            )}
+                            {scrubSaveStatus === 'saving' && (
+                              <span className="text-[10px] text-yellow-500 font-bold uppercase">Saving...</span>
+                            )}
+                            {scrubSaveStatus === 'idle' && hasUnsavedChanges && (
+                              <span className="text-[10px] text-red-hot font-bold uppercase">Unsaved</span>
+                            )}
                           </div>
                           <div>
                             <div className="flex items-center justify-between">
@@ -1742,24 +1782,28 @@ export default function FocusSelector() {
                               className="w-full h-2 accent-orange-accent cursor-pointer"
                             />
                           </div>
-                          {/* Navigate between keyframes */}
+                          {/* Save + Navigate */}
                           <div className="flex gap-2 pt-1">
                             <button
                               disabled={!prevFp}
-                              onClick={() => { if (prevFp) { seekToFrame(prevFp.time_start); setScrubTime(prevFp.time_start); } }}
-                              className="flex-1 px-2 py-1.5 text-[10px] font-bold uppercase border border-border-subtle text-white-dim hover:border-orange-accent hover:text-orange-accent transition-all disabled:opacity-20 disabled:cursor-not-allowed"
+                              onClick={() => { if (prevFp) handleSaveAndNext(prevFp); }}
+                              className="px-2 py-1.5 text-[10px] font-bold uppercase border border-border-subtle text-white-dim hover:border-orange-accent hover:text-orange-accent transition-all disabled:opacity-20 disabled:cursor-not-allowed"
                             >
-                              ← Prev frame
+                              ← Prev
                             </button>
-                            <span className="text-[9px] text-white-dim self-center">
-                              {currentIdx + 1}/{sortedFps.length}
-                            </span>
+                            <button
+                              onClick={handleSave}
+                              disabled={!hasUnsavedChanges || scrubSaveStatus === 'saving'}
+                              className="flex-1 px-3 py-1.5 text-[10px] font-bold uppercase bg-orange-accent text-white hover:bg-red-hot transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                            >
+                              {scrubSaveStatus === 'saving' ? 'Saving...' : scrubSaveStatus === 'saved' ? '✓ Saved' : 'Save'}
+                            </button>
                             <button
                               disabled={!nextFp}
-                              onClick={() => { if (nextFp) { seekToFrame(nextFp.time_start); setScrubTime(nextFp.time_start); } }}
-                              className="flex-1 px-2 py-1.5 text-[10px] font-bold uppercase border border-border-subtle text-white-dim hover:border-orange-accent hover:text-orange-accent transition-all disabled:opacity-20 disabled:cursor-not-allowed"
+                              onClick={() => { if (nextFp) handleSaveAndNext(nextFp); }}
+                              className="px-2 py-1.5 text-[10px] font-bold uppercase border border-border-subtle text-white-dim hover:border-orange-accent hover:text-orange-accent transition-all disabled:opacity-20 disabled:cursor-not-allowed"
                             >
-                              Next frame →
+                              Next →
                             </button>
                           </div>
                         </div>
