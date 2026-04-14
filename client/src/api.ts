@@ -267,7 +267,20 @@ export class ApiClient {
       avg_confidence: number;
     }>,
     videoDuration: number,
-    targetPlatform: string
+    targetPlatform: string,
+    storyBrief?: string,
+    storyAnnotations?: Array<{
+      id: string;
+      time: number;
+      bbox: [number, number, number, number];
+      label: string;
+      isKeyMoment: boolean;
+      frameImageBase64?: string;
+    }>,
+    keyFrames?: Array<{
+      time: number;
+      imageBase64: string;
+    }>,
   ): Promise<{
     segments: Array<{
       time_start: number;
@@ -283,7 +296,14 @@ export class ApiClient {
   }> {
     return this.request(`/videos/${videoId}/ai-edit`, {
       method: 'POST',
-      body: JSON.stringify({ subjects, videoDuration, targetPlatform }),
+      body: JSON.stringify({
+        subjects,
+        videoDuration,
+        targetPlatform,
+        storyBrief,
+        storyAnnotations,
+        keyFrames,
+      }),
     });
   }
 }

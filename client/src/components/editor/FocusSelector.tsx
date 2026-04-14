@@ -7,7 +7,7 @@ import type { Subject as ScannerSubject } from '../../services/VideoScannerServi
 import type { Subject, ScanOptions, ScanStatus } from '../../types/scan';
 import type { FocusPointCreate } from '../../types/focusPoint';
 import { segmentPositionsToFocusPoints } from '../../services/FocusInterpolationService';
-import { Sparkles, Play, Pause } from 'lucide-react';
+import { Sparkles, Play, Pause, PenTool, X, Star, ChevronDown, ChevronRight, BookOpen } from 'lucide-react';
 
 const PLATFORM_ASPECT_RATIOS: Record<string, [number, number]> = {
   'tiktok': [9, 16],
@@ -41,6 +41,20 @@ interface LiveDetection {
     class: string;
     score: number;
   }>;
+}
+
+interface KeyFrame {
+  time: number;
+  imageBase64: string;
+}
+
+export interface StoryAnnotation {
+  id: string;
+  time: number;
+  bbox: [number, number, number, number];
+  label: string;
+  isKeyMoment: boolean;
+  frameImageBase64?: string;
 }
 
 function formatTime(seconds: number): string {
@@ -268,6 +282,22 @@ export default function FocusSelector() {
   const [aiStrategy, setAiStrategy] = useState<AIStrategy | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
 
+  // Story brief
+  const [storyBrief, setStoryBrief] = useState('');
+  const [briefExpanded, setBriefExpanded] = useState(false);
+
+  // Key frames captured during scan
+  const [keyFrames, setKeyFrames] = useState<KeyFrame[]>([]);
+
+  // Manual story annotations
+  const [annotations, setAnnotations] = useState<StoryAnnotation[]>([]);
+  const [annotationMode, setAnnotationMode] = useState(false);
+  const [drawingBox, setDrawingBox] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
+  const [pendingAnnotation, setPendingAnnotation] = useState<{ bbox: [number, number, number, number]; time: number; frameBase64?: string } | null>(null);
+  const [annotationLabel, setAnnotationLabel] = useState('');
+  const [annotationKeyMoment, setAnnotationKeyMoment] = useState(true);
+  const annotationOverlayRef = useRef<HTMLDivElement>(null);
+
   // Scan options (local)
   const [scanOptions, setScanOptions] = useState<ScanOptions>({
     interval: 0.5,
@@ -353,6 +383,8 @@ export default function FocusSelector() {
     setAcceptedIds(new Set());
     setRejectedIds(new Set());
     setThumbnails(new Map());
+    setKeyFrames([]);
+    setAnnotations([]);
 
     // Create a thumbnail canvas for capturing frames
     if (!thumbCanvasRef.current) {
@@ -385,6 +417,7 @@ export default function FocusSelector() {
 
       let uniqueCount = 0;
       const capturedThumbs = new Map<string, string>();
+      const capturedKeyFrames: KeyFrame[] = [];
 
       const subjects = await scanner.scanVideo(duration, {
         interval: scanOptions.interval,
@@ -403,6 +436,21 @@ export default function FocusSelector() {
 
           setLiveDetection({ frameTime, objects: mapped });
           drawLiveDetections(mapped);
+
+          // Capture key frame thumbnail (~1 per second for filmstrip)
+          const tc = thumbCanvasRef.current;
+          if (tc && video) {
+            tc.width = 160;
+            tc.height = 90;
+            const tctx = tc.getContext('2d');
+            if (tctx) {
+              tctx.drawImage(video, 0, 0, tc.width, tc.height);
+              capturedKeyFrames.push({
+                time: frameTime,
+                imageBase64: tc.toDataURL('image/jpeg', 0.6),
+              });
+            }
+          }
 
           if (objects.length > 0) {
             uniqueCount = Math.max(uniqueCount, objects.length);
@@ -471,6 +519,7 @@ export default function FocusSelector() {
       setDetectedSubjects(converted);
       setAcceptedIds(new Set(converted.map(s => s.id)));
       setSubjectsTrackedCount(converted.length);
+      setKeyFrames(capturedKeyFrames);
       setLiveDetection(null);
       setScanStatus('review');
     } catch (err) {
@@ -556,6 +605,96 @@ export default function FocusSelector() {
     setAcceptedIds(new Set());
     setRejectedIds(new Set());
     setAiStrategy(null);
+    setAnnotations([]);
+    setKeyFrames([]);
+    setAnnotationMode(false);
+    setPendingAnnotation(null);
+  }, []);
+
+  // ---- Annotation controls ----
+  const seekToFrame = useCallback((time: number) => {
+    const video = videoElementRef.current;
+    if (video) video.currentTime = time;
+  }, [videoElementRef]);
+
+  const getAnnotationRelPos = useCallback((clientX: number, clientY: number) => {
+    const el = annotationOverlayRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100)),
+      y: Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100)),
+    };
+  }, []);
+
+  const handleAnnotationMouseDown = useCallback((e: React.MouseEvent) => {
+    if (!annotationMode) return;
+    const pos = getAnnotationRelPos(e.clientX, e.clientY);
+    if (!pos) return;
+    setDrawingBox({ startX: pos.x, startY: pos.y, endX: pos.x, endY: pos.y });
+  }, [annotationMode, getAnnotationRelPos]);
+
+  const handleAnnotationMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!drawingBox) return;
+    const pos = getAnnotationRelPos(e.clientX, e.clientY);
+    if (!pos) return;
+    setDrawingBox(prev => prev ? { ...prev, endX: pos.x, endY: pos.y } : null);
+  }, [drawingBox, getAnnotationRelPos]);
+
+  const handleAnnotationMouseUp = useCallback(() => {
+    if (!drawingBox) return;
+    const x = Math.min(drawingBox.startX, drawingBox.endX);
+    const y = Math.min(drawingBox.startY, drawingBox.endY);
+    const w = Math.abs(drawingBox.endX - drawingBox.startX);
+    const h = Math.abs(drawingBox.endY - drawingBox.startY);
+
+    if (w < 2 || h < 2) {
+      setDrawingBox(null);
+      return;
+    }
+
+    // Capture frame thumbnail for this annotation
+    const video = videoElementRef.current;
+    let frameBase64: string | undefined;
+    const tc = thumbCanvasRef.current;
+    if (tc && video) {
+      tc.width = 160;
+      tc.height = 90;
+      const tctx = tc.getContext('2d');
+      if (tctx) {
+        tctx.drawImage(video, 0, 0, tc.width, tc.height);
+        frameBase64 = tc.toDataURL('image/jpeg', 0.6);
+      }
+    }
+
+    setPendingAnnotation({
+      bbox: [x, y, w, h],
+      time: video?.currentTime || 0,
+      frameBase64,
+    });
+    setDrawingBox(null);
+    setAnnotationLabel('');
+    setAnnotationKeyMoment(true);
+  }, [drawingBox, videoElementRef]);
+
+  const confirmAnnotation = useCallback(() => {
+    if (!pendingAnnotation || !annotationLabel.trim()) return;
+    const newAnnotation: StoryAnnotation = {
+      id: `ann_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      time: pendingAnnotation.time,
+      bbox: pendingAnnotation.bbox,
+      label: annotationLabel.trim(),
+      isKeyMoment: annotationKeyMoment,
+      frameImageBase64: pendingAnnotation.frameBase64,
+    };
+    setAnnotations(prev => [...prev, newAnnotation]);
+    setPendingAnnotation(null);
+    setAnnotationLabel('');
+    setAnnotationMode(false);
+  }, [pendingAnnotation, annotationLabel, annotationKeyMoment]);
+
+  const removeAnnotation = useCallback((id: string) => {
+    setAnnotations(prev => prev.filter(a => a.id !== id));
   }, []);
 
   const requestAISuggestion = useCallback(async () => {
@@ -582,14 +721,29 @@ export default function FocusSelector() {
         };
       });
 
-      const strategy = await api.getAIFocusStrategy(videoId, subjectInputs, duration, targetPlatform);
+      // Select ~6 evenly-spaced key frames for vision analysis
+      const visionFrames = keyFrames.length <= 6
+        ? keyFrames
+        : Array.from({ length: 6 }, (_, i) =>
+            keyFrames[Math.round(i * (keyFrames.length - 1) / 5)]
+          );
+
+      const strategy = await api.getAIFocusStrategy(
+        videoId,
+        subjectInputs,
+        duration,
+        targetPlatform,
+        storyBrief || undefined,
+        annotations.length > 0 ? annotations : undefined,
+        visionFrames.length > 0 ? visionFrames : undefined,
+      );
       setAiStrategy(strategy);
     } catch (err) {
       setError('AI suggestion failed: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       setAiLoading(false);
     }
-  }, [api, videoId, detectedSubjects, duration, targetPlatform]);
+  }, [api, videoId, detectedSubjects, duration, targetPlatform, storyBrief, annotations, keyFrames]);
 
   const applyAIStrategy = useCallback(async () => {
     if (!aiStrategy) return;
@@ -597,7 +751,7 @@ export default function FocusSelector() {
     setScanStatus('finalizing');
 
     const focusPointCreates: FocusPointCreate[] = aiStrategy.segments.map(seg => {
-      // Find the matching subject's positions
+      // Try to find matching detected subject
       const subject = detectedSubjects.find(s => s.class === seg.follow_subject);
       const positions = subject?.positions.filter(
         p => p.time >= seg.time_start && p.time <= seg.time_end
@@ -619,9 +773,20 @@ export default function FocusSelector() {
         baseY = avgBbox.y / positions.length;
         width = avgBbox.w / positions.length;
         height = avgBbox.h / positions.length;
+      } else {
+        // Fall back to annotation bbox if follow_subject matches an annotation label
+        const matchingAnnotation = annotations.find(
+          a => a.label.toLowerCase().replace(/\s+/g, '_') === seg.follow_subject.toLowerCase().replace(/\s+/g, '_')
+            || a.label.toLowerCase() === seg.follow_subject.toLowerCase()
+        );
+        if (matchingAnnotation) {
+          baseX = matchingAnnotation.bbox[0] + matchingAnnotation.bbox[2] / 2;
+          baseY = matchingAnnotation.bbox[1] + matchingAnnotation.bbox[3] / 2;
+          width = matchingAnnotation.bbox[2];
+          height = matchingAnnotation.bbox[3];
+        }
       }
 
-      // Apply composition offsets
       const adjustedX = Math.max(0, Math.min(100 - width, baseX - width / 2 + seg.offset_x));
       const adjustedY = Math.max(0, Math.min(100 - height, baseY - height / 2 + seg.offset_y));
 
@@ -646,7 +811,9 @@ export default function FocusSelector() {
     setAcceptedIds(new Set());
     setRejectedIds(new Set());
     setAiStrategy(null);
-  }, [aiStrategy, detectedSubjects, addFocusPointsBatch]);
+    setAnnotations([]);
+    setKeyFrames([]);
+  }, [aiStrategy, detectedSubjects, annotations, addFocusPointsBatch]);
 
   if (!videoId) return null;
 
@@ -886,12 +1053,224 @@ export default function FocusSelector() {
             </button>
           </div>
 
+          {/* Story Brief */}
+          <div className="mb-4 p-3 bg-black-deep border border-border-subtle">
+            <button
+              onClick={() => setBriefExpanded(!briefExpanded)}
+              className="flex items-center gap-2 w-full text-left"
+            >
+              {briefExpanded ? <ChevronDown className="w-4 h-4 text-orange-accent" /> : <ChevronRight className="w-4 h-4 text-orange-accent" />}
+              <BookOpen className="w-4 h-4 text-orange-accent" />
+              <span className="text-xs font-bold text-orange-accent uppercase tracking-wide">Story Brief</span>
+              {storyBrief && !briefExpanded && (
+                <span className="text-[10px] text-white-dim ml-auto truncate max-w-[200px]">{storyBrief}</span>
+              )}
+            </button>
+            {briefExpanded && (
+              <div className="mt-2">
+                <p className="text-[10px] text-white-dim mb-2">
+                  Describe the video's story, what matters editorially, and what the AI should prioritize.
+                  This overrides detection confidence when making framing decisions.
+                </p>
+                <textarea
+                  value={storyBrief}
+                  onChange={e => setStoryBrief(e.target.value)}
+                  placeholder="e.g. Twinings tea ad. Woman is cosy indoors on a rainy day. She doesn't want to take the dog out. The rain on the window is the central visual motif."
+                  className="w-full bg-black-card border border-border-subtle text-white-full text-xs p-2 resize-y min-h-[60px] max-h-[120px] placeholder:text-white-dim/40"
+                  rows={3}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Key Frame Strip + Annotation */}
+          {keyFrames.length > 0 && (
+            <div className="mb-4 p-3 bg-black-deep border border-border-subtle">
+              <div className="flex items-center gap-2 mb-2">
+                <PenTool className="w-4 h-4 text-orange-accent" />
+                <h5 className="text-xs font-bold text-orange-accent uppercase tracking-wide">
+                  Key Frames &amp; Annotations
+                </h5>
+                <button
+                  onClick={() => { setAnnotationMode(!annotationMode); setPendingAnnotation(null); setDrawingBox(null); }}
+                  className={`ml-auto px-2 py-1 text-[10px] font-bold uppercase tracking-wide transition-all flex items-center gap-1 ${
+                    annotationMode
+                      ? 'bg-orange-accent text-white border border-orange-accent'
+                      : 'bg-black-card text-white-muted border border-border-subtle hover:border-orange-accent'
+                  }`}
+                >
+                  <PenTool className="w-3 h-3" />
+                  {annotationMode ? 'Drawing...' : 'Annotate'}
+                </button>
+              </div>
+
+              {annotationMode && (
+                <p className="text-[10px] text-orange-accent mb-2">
+                  Click a frame below to seek, then draw a box on the video above to mark what COCO-SSD missed.
+                </p>
+              )}
+
+              {/* Scrollable filmstrip */}
+              <div className="flex gap-1 overflow-x-auto pb-2 scrollbar-thin">
+                {keyFrames.map((kf, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => seekToFrame(kf.time)}
+                    className="shrink-0 border border-border-subtle hover:border-orange-accent transition-colors relative group"
+                    title={`${kf.time.toFixed(1)}s`}
+                  >
+                    <img src={kf.imageBase64} alt={`Frame ${kf.time.toFixed(1)}s`} className="w-20 h-[45px] object-cover" />
+                    <span className="absolute bottom-0 left-0 bg-black/70 text-[8px] text-white px-1">
+                      {kf.time.toFixed(1)}s
+                    </span>
+                    {annotations.some(a => Math.abs(a.time - kf.time) < 0.5) && (
+                      <div className="absolute top-0 right-0 w-2 h-2 bg-orange-accent" />
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              {/* Annotation drawing overlay - shown on the video canvas area */}
+              {annotationMode && (
+                <div
+                  ref={annotationOverlayRef}
+                  className="relative mt-2 border-2 border-dashed border-orange-accent cursor-crosshair"
+                  style={{ aspectRatio: '16/9' }}
+                  onMouseDown={handleAnnotationMouseDown}
+                  onMouseMove={handleAnnotationMouseMove}
+                  onMouseUp={handleAnnotationMouseUp}
+                  onMouseLeave={() => setDrawingBox(null)}
+                >
+                  {/* Video frame background */}
+                  <video
+                    src={videoElementRef.current?.src || ''}
+                    crossOrigin="anonymous"
+                    className="w-full h-full object-contain pointer-events-none"
+                    ref={el => {
+                      if (el && videoElementRef.current) {
+                        el.currentTime = videoElementRef.current.currentTime;
+                      }
+                    }}
+                    muted
+                    playsInline
+                  />
+
+                  {/* Drawing rectangle */}
+                  {drawingBox && (
+                    <div
+                      className="absolute border-2 border-orange-accent bg-orange-accent/20 pointer-events-none"
+                      style={{
+                        left: `${Math.min(drawingBox.startX, drawingBox.endX)}%`,
+                        top: `${Math.min(drawingBox.startY, drawingBox.endY)}%`,
+                        width: `${Math.abs(drawingBox.endX - drawingBox.startX)}%`,
+                        height: `${Math.abs(drawingBox.endY - drawingBox.startY)}%`,
+                      }}
+                    />
+                  )}
+
+                  {/* Existing annotations on this frame */}
+                  {annotations
+                    .filter(a => Math.abs(a.time - (videoElementRef.current?.currentTime || 0)) < 1)
+                    .map(a => (
+                      <div
+                        key={a.id}
+                        className="absolute border-2 border-green-500 bg-green-500/10 pointer-events-none"
+                        style={{ left: `${a.bbox[0]}%`, top: `${a.bbox[1]}%`, width: `${a.bbox[2]}%`, height: `${a.bbox[3]}%` }}
+                      >
+                        <span className="absolute -top-4 left-0 bg-green-500 text-black text-[8px] px-1 font-bold">
+                          {a.label}
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              {/* Pending annotation form */}
+              {pendingAnnotation && (
+                <div className="mt-2 p-2 bg-black-card border border-orange-accent space-y-2">
+                  <p className="text-[10px] text-orange-accent font-bold uppercase">Name this element</p>
+                  <input
+                    type="text"
+                    value={annotationLabel}
+                    onChange={e => setAnnotationLabel(e.target.value)}
+                    placeholder="e.g. rain on window, product shot, reluctant expression"
+                    className="w-full bg-black-deep border border-border-subtle text-white-full text-xs p-2 placeholder:text-white-dim/40"
+                    autoFocus
+                    onKeyDown={e => { if (e.key === 'Enter') confirmAnnotation(); }}
+                  />
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-1 text-[10px] text-white-dim cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={annotationKeyMoment}
+                        onChange={e => setAnnotationKeyMoment(e.target.checked)}
+                        className="accent-orange-accent"
+                      />
+                      <Star className="w-3 h-3 text-orange-accent" />
+                      Key story moment
+                    </label>
+                    <span className="text-[10px] text-white-dim">at {pendingAnnotation.time.toFixed(1)}s</span>
+                    <div className="ml-auto flex gap-1">
+                      <button
+                        onClick={() => setPendingAnnotation(null)}
+                        className="px-2 py-1 text-[10px] text-white-dim border border-border-subtle hover:border-red-hot"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={confirmAnnotation}
+                        disabled={!annotationLabel.trim()}
+                        className="px-2 py-1 text-[10px] font-bold text-white bg-orange-accent border border-orange-accent disabled:opacity-50"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Annotations list */}
+              {annotations.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  <div className="text-[10px] text-white-dim uppercase tracking-wide">
+                    {annotations.length} annotation{annotations.length !== 1 ? 's' : ''}
+                  </div>
+                  {annotations.map(a => (
+                    <div
+                      key={a.id}
+                      className="flex items-center gap-2 text-[10px] bg-black-card p-2 border border-border-subtle cursor-pointer hover:border-orange-accent"
+                      onClick={() => seekToFrame(a.time)}
+                    >
+                      {a.frameImageBase64 && (
+                        <img src={a.frameImageBase64} alt="" className="w-10 h-[22px] object-cover shrink-0 border border-border-subtle" />
+                      )}
+                      <span className="text-white-dim font-mono shrink-0">{a.time.toFixed(1)}s</span>
+                      <span className="text-orange-accent font-bold uppercase truncate">{a.label}</span>
+                      {a.isKeyMoment && <Star className="w-3 h-3 text-orange-accent shrink-0" fill="currentColor" />}
+                      <button
+                        onClick={e => { e.stopPropagation(); removeAnnotation(a.id); }}
+                        className="ml-auto text-white-dim hover:text-red-hot shrink-0"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* AI Editor Section */}
           {detectedSubjects.length > 0 && (
             <div className="mb-4 p-3 bg-black-deep border border-border-subtle">
               <div className="flex items-center gap-2 mb-2">
                 <Sparkles className="w-4 h-4 text-orange-accent" />
                 <h5 className="text-xs font-bold text-orange-accent uppercase tracking-wide">AI Focus Editor</h5>
+                {(storyBrief || annotations.length > 0) && (
+                  <span className="text-[10px] text-green-500 ml-auto">
+                    Story-aware {storyBrief ? '+ brief' : ''}{annotations.length > 0 ? ` + ${annotations.length} annotations` : ''}
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center gap-2 mb-3">

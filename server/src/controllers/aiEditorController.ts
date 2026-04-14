@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { generateFocusStrategy, SubjectInput } from '../services/aiEditorService';
+import { generateFocusStrategy, SubjectInput, StoryAnnotationInput, KeyFrameInput } from '../services/aiEditorService';
 
 export const getAIFocusStrategy = async (req: Request, res: Response) => {
   try {
@@ -8,7 +8,7 @@ export const getAIFocusStrategy = async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const { subjects, videoDuration, targetPlatform } = req.body;
+    const { subjects, videoDuration, targetPlatform, storyBrief, storyAnnotations, keyFrames } = req.body;
 
     if (!subjects || !Array.isArray(subjects) || subjects.length === 0) {
       return res.status(400).json({ error: 'subjects array is required' });
@@ -32,7 +32,27 @@ export const getAIFocusStrategy = async (req: Request, res: Response) => {
       avg_confidence: s.avg_confidence || 0.5,
     }));
 
-    const strategy = await generateFocusStrategy(subjectInputs, videoDuration, targetPlatform);
+    const annotationInputs: StoryAnnotationInput[] | undefined = storyAnnotations?.map((a: any) => ({
+      id: a.id || '',
+      time: a.time || 0,
+      bbox: a.bbox || [0, 0, 100, 100],
+      label: a.label || '',
+      isKeyMoment: a.isKeyMoment ?? false,
+    }));
+
+    const keyFrameInputs: KeyFrameInput[] | undefined = keyFrames?.map((kf: any) => ({
+      time: kf.time || 0,
+      imageBase64: kf.imageBase64 || '',
+    }));
+
+    const strategy = await generateFocusStrategy(
+      subjectInputs,
+      videoDuration,
+      targetPlatform,
+      storyBrief || undefined,
+      annotationInputs,
+      keyFrameInputs,
+    );
 
     return res.json(strategy);
   } catch (error) {

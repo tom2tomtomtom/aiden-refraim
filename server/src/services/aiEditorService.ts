@@ -6,8 +6,21 @@ export interface SubjectInput {
   first_seen: number;
   last_seen: number;
   position_count: number;
-  avg_screen_coverage: number; // percentage of frame area
+  avg_screen_coverage: number;
   avg_confidence: number;
+}
+
+export interface StoryAnnotationInput {
+  id: string;
+  time: number;
+  bbox: [number, number, number, number];
+  label: string;
+  isKeyMoment: boolean;
+}
+
+export interface KeyFrameInput {
+  time: number;
+  imageBase64: string;
 }
 
 export interface FocusStrategy {
@@ -18,12 +31,17 @@ export interface FocusStrategy {
 export interface FocusSegment {
   time_start: number;
   time_end: number;
-  follow_subject: string; // subject class or "none"
+  follow_subject: string;
   composition: 'center' | 'rule_of_thirds_left' | 'rule_of_thirds_right' | 'top_center' | 'bottom_center';
-  offset_x: number; // -50 to 50 adjustment from detected center
+  offset_x: number;
   offset_y: number;
   transition: 'smooth_pan' | 'hard_cut';
   reason: string;
+}
+
+interface SceneDescription {
+  time: number;
+  description: string;
 }
 
 const PLATFORM_RULES: Record<string, string> = {
@@ -37,10 +55,16 @@ const PLATFORM_RULES: Record<string, string> = {
   'facebook-feed': `1:1 square. Center composition. Similar to Instagram square.`,
 };
 
+// Vision analysis cache: videoId -> scene descriptions
+const visionCache = new Map<string, SceneDescription[]>();
+
 export async function generateFocusStrategy(
   subjects: SubjectInput[],
   videoDuration: number,
-  targetPlatform: string
+  targetPlatform: string,
+  storyBrief?: string,
+  annotations?: StoryAnnotationInput[],
+  keyFrames?: KeyFrameInput[],
 ): Promise<FocusStrategy> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
 
@@ -50,14 +74,45 @@ export async function generateFocusStrategy(
 
   const platformRule = PLATFORM_RULES[targetPlatform] || PLATFORM_RULES['youtube-main'];
 
-  const prompt = buildPrompt(subjects, videoDuration, targetPlatform, platformRule);
+  // Run vision analysis if key frames are provided (with caching)
+  let sceneDescriptions: SceneDescription[] = [];
+  if (keyFrames && keyFrames.length > 0) {
+    const cacheKey = keyFrames.map(kf => kf.time.toFixed(1)).join(',');
+    const cached = visionCache.get(cacheKey);
+    if (cached) {
+      sceneDescriptions = cached;
+      console.log('Using cached vision analysis');
+    } else {
+      try {
+        sceneDescriptions = await analyzeScenes(keyFrames, apiKey);
+        visionCache.set(cacheKey, sceneDescriptions);
+        // Evict old entries if cache grows too large
+        if (visionCache.size > 20) {
+          const firstKey = visionCache.keys().next().value;
+          if (firstKey) visionCache.delete(firstKey);
+        }
+      } catch (err) {
+        console.error('Vision analysis failed, continuing without scene descriptions:', err);
+      }
+    }
+  }
+
+  const prompt = buildPrompt(
+    subjects,
+    videoDuration,
+    targetPlatform,
+    platformRule,
+    storyBrief,
+    annotations,
+    sceneDescriptions,
+  );
 
   try {
     const response = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
+        max_tokens: 3000,
         messages: [{ role: 'user', content: prompt }],
       },
       {
@@ -66,13 +121,12 @@ export async function generateFocusStrategy(
           'anthropic-version': '2023-06-01',
           'content-type': 'application/json',
         },
-        timeout: 30000,
+        timeout: 45000,
       }
     );
 
     const text = response.data.content[0]?.text || '';
 
-    // Extract JSON from response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return generateRuleBasedStrategy(subjects, videoDuration, targetPlatform);
@@ -80,7 +134,6 @@ export async function generateFocusStrategy(
 
     const parsed = JSON.parse(jsonMatch[0]) as FocusStrategy;
 
-    // Validate and clamp values
     for (const seg of parsed.segments) {
       seg.time_start = Math.max(0, seg.time_start);
       seg.time_end = Math.min(videoDuration, seg.time_end);
@@ -101,40 +154,154 @@ export async function generateFocusStrategy(
   }
 }
 
+/**
+ * Send key frames to Claude Vision for rich scene descriptions.
+ */
+async function analyzeScenes(
+  keyFrames: KeyFrameInput[],
+  apiKey: string
+): Promise<SceneDescription[]> {
+  const imageContent = keyFrames.map((kf, i) => {
+    const base64Data = kf.imageBase64.replace(/^data:image\/[^;]+;base64,/, '');
+    return [
+      {
+        type: 'text' as const,
+        text: `Frame ${i + 1} at ${kf.time.toFixed(1)}s:`,
+      },
+      {
+        type: 'image' as const,
+        source: {
+          type: 'base64' as const,
+          media_type: 'image/jpeg' as const,
+          data: base64Data,
+        },
+      },
+    ];
+  }).flat();
+
+  const response = await axios.post(
+    'https://api.anthropic.com/v1/messages',
+    {
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1500,
+      messages: [{
+        role: 'user',
+        content: [
+          ...imageContent,
+          {
+            type: 'text',
+            text: `For each frame above, write ONE concise sentence describing what is happening visually — subjects, actions, mood, lighting, weather, props, spatial relationships. Focus on what a video editor needs to know for framing decisions.
+
+Respond with ONLY valid JSON:
+{ "scenes": [{ "frame": 1, "time": 0.0, "description": "..." }, ...] }`,
+          },
+        ],
+      }],
+    },
+    {
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      timeout: 30000,
+    }
+  );
+
+  const text = response.data.content[0]?.text || '';
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return [];
+
+  const parsed = JSON.parse(jsonMatch[0]);
+  if (!parsed.scenes || !Array.isArray(parsed.scenes)) return [];
+
+  return parsed.scenes.map((s: any, i: number) => ({
+    time: s.time ?? keyFrames[i]?.time ?? 0,
+    description: s.description || '',
+  }));
+}
+
 function buildPrompt(
   subjects: SubjectInput[],
   videoDuration: number,
   platform: string,
-  platformRule: string
+  platformRule: string,
+  storyBrief?: string,
+  annotations?: StoryAnnotationInput[],
+  sceneDescriptions?: SceneDescription[],
 ): string {
+  const sections: string[] = [];
+
+  sections.push(`You are a professional video editor creating a reframing strategy. Your goal is to serve the STORY — not just follow the biggest or most-detected object.
+
+VIDEO: ${videoDuration.toFixed(1)}s duration
+TARGET: ${platform}
+PLATFORM RULES: ${platformRule}`);
+
+  // HIGHEST PRIORITY: Story brief from the user
+  if (storyBrief) {
+    sections.push(`STORY BRIEF (from the user — HIGHEST PRIORITY):
+"${storyBrief}"
+
+The user has described the narrative intent. Your editorial choices MUST serve this story. A subject's narrative importance overrides its detection frequency or screen coverage. If the brief mentions something specific (e.g. "rain on the window"), that IS the shot — even if object detection labelled it differently.`);
+  }
+
+  // HIGH PRIORITY: Manual annotations
+  if (annotations && annotations.length > 0) {
+    const annotationList = annotations
+      .sort((a, b) => a.time - b.time)
+      .map(a => {
+        const keyTag = a.isKeyMoment ? ' — KEY MOMENT' : '';
+        return `[${a.time.toFixed(1)}s] "${a.label}" (region: ${a.bbox[0].toFixed(0)}%,${a.bbox[1].toFixed(0)}%,${a.bbox[2].toFixed(0)}%x${a.bbox[3].toFixed(0)}%)${keyTag}`;
+      })
+      .join('\n');
+
+    sections.push(`USER ANNOTATIONS (manually marked — HIGH PRIORITY):
+${annotationList}
+
+These annotations identify elements that automatic detection missed or mislabelled. The user drew a box and named it semantically. KEY MOMENT annotations are narrative pivot points that MUST be prominently featured. Use the user's label as the follow_subject name, and the bbox position for framing.`);
+  }
+
+  // MEDIUM PRIORITY: Vision scene descriptions
+  if (sceneDescriptions && sceneDescriptions.length > 0) {
+    const sceneList = sceneDescriptions
+      .map(s => `[${s.time.toFixed(1)}s] ${s.description}`)
+      .join('\n');
+
+    sections.push(`SCENE DESCRIPTIONS (from vision analysis):
+${sceneList}
+
+These describe what is actually happening in each shot. Use them to understand the editorial flow — scene changes, mood shifts, and narrative beats that object detection alone cannot capture.`);
+  }
+
+  // LOWEST PRIORITY: Auto-detected subjects
   const subjectList = subjects
     .map(s => `- ${s.class}: visible ${s.first_seen.toFixed(1)}s-${s.last_seen.toFixed(1)}s, detected ${s.position_count} times, avg ${s.avg_screen_coverage.toFixed(1)}% screen coverage, confidence ${(s.avg_confidence * 100).toFixed(0)}%`)
     .join('\n');
 
-  return `You are a professional video editor creating a dynamic reframing strategy. Your goal is to produce an engaging, visually varied result—not a static lock on one subject.
-
-VIDEO: ${videoDuration.toFixed(1)}s duration
-TARGET: ${platform}
-PLATFORM RULES: ${platformRule}
-
-DETECTED SUBJECTS:
+  sections.push(`DETECTED SUBJECTS (auto-detection — use as fallback):
 ${subjectList}
 
-IMPORTANT CREATIVE DIRECTION:
-- Do NOT follow the same subject for every segment. Switch between subjects when multiple are visible in the same time window. For example, if a person and dog are both visible from 2-17s, dedicate some segments to the dog.
-- Vary composition across segments (center, rule_of_thirds_left, rule_of_thirds_right, top_center). Avoid repeating the same composition for consecutive segments.
-- Use hard_cut when switching between different subjects. Use smooth_pan when staying on the same subject but adjusting framing.
-- If the hero subject leaves the frame (their visibility window ends), switch to the next best subject or use "none" with center composition.
-- Vary segment durations based on action: shorter (2-4s) for dynamic moments with multiple subjects, longer (5-8s) for solo subjects.
-- Use offset_x and offset_y creatively: negative offset_y (-5 to -15) for headroom on people, positive offset_x (+10 to +20) for rule_of_thirds_right, etc.
+These are COCO-SSD object detection labels. They may be wrong or misleading (e.g. "potted_plant" might be a window with rain). If user annotations or the story brief contradict these labels, trust the user.`);
 
-Create a focus strategy with these rules:
-1. Identify the best subject for each time segment—alternate between subjects when possible
-2. Apply composition rules appropriate for the platform
-3. Use smooth_pan for gradual changes and hard_cut for subject switches or scene changes
-4. Provide offset_x and offset_y adjustments (-50 to 50) for composition
+  // Priority rules
+  sections.push(`PRIORITY RULES:
+1. User annotations override COCO-SSD labels at the same timestamp
+2. KEY MOMENT annotations must be featured prominently
+3. Story brief determines which shots are editorially important
+4. A subject's narrative importance overrides its detection frequency
+5. When the brief or annotations mention an element, use THAT as follow_subject (e.g. "rain_on_window" not "potted_plant")
+6. Vary composition and transition types across segments
+7. Use hard_cut for scene changes or subject switches, smooth_pan for reframing within a shot
 
-Respond with ONLY valid JSON in this exact format:
+CREATIVE DIRECTION:
+- Do NOT follow the same subject for every segment
+- Vary composition: center, rule_of_thirds_left, rule_of_thirds_right, top_center
+- Use offset_x and offset_y for precise framing (-50 to 50)
+- Segment durations: 2-4s for dynamic moments, 5-8s for establishing shots
+- If an annotated key moment exists at a timestamp, dedicate a segment to it
+
+Respond with ONLY valid JSON:
 {
   "segments": [
     {
@@ -145,16 +312,17 @@ Respond with ONLY valid JSON in this exact format:
       "offset_x": 0,
       "offset_y": -5,
       "transition": "smooth_pan",
-      "reason": "Solo subject, center framed with slight headroom"
+      "reason": "..."
     }
   ],
   "reasoning": "Brief overall strategy explanation"
-}`;
+}`);
+
+  return sections.join('\n\n');
 }
 
 /**
  * Rule-based fallback when no API key is available.
- * Makes reasonable default decisions without AI.
  */
 function generateRuleBasedStrategy(
   subjects: SubjectInput[],
@@ -177,7 +345,6 @@ function generateRuleBasedStrategy(
     };
   }
 
-  // Score subjects: person > other, more detections = more important, bigger = more important
   const scored = subjects.map(s => ({
     ...s,
     score: (s.class === 'person' ? 3 : 1) * s.position_count * (s.avg_screen_coverage / 100),
@@ -196,7 +363,6 @@ function generateRuleBasedStrategy(
 
   for (let t = 0; t < videoDuration; t += segmentDuration) {
     const segEnd = Math.min(t + segmentDuration, videoDuration);
-
     const activeSubjects = scored.filter(s => s.first_seen <= segEnd && s.last_seen >= t);
 
     let target: typeof scored[0];
