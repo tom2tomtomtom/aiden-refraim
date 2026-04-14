@@ -276,6 +276,10 @@ export default function FocusSelector() {
   const [liveDetection, setLiveDetection] = useState<LiveDetection | null>(null);
   const [subjectsTrackedCount, setSubjectsTrackedCount] = useState(0);
 
+  // Review sub-step: guides user through the review phase
+  // 'subjects' = pick subjects, 'story' = brief + annotate, 'ai' = generate strategy, 'adjust' = QA + fix
+  const [reviewStep, setReviewStep] = useState<'subjects' | 'story' | 'ai' | 'adjust'>('subjects');
+
   // Review state
   const [detectedSubjects, setDetectedSubjects] = useState<Subject[]>([]);
   const [acceptedIds, setAcceptedIds] = useState<Set<string>>(new Set());
@@ -536,6 +540,7 @@ export default function FocusSelector() {
       setKeyFrames(capturedKeyFrames);
       setLiveDetection(null);
       setScanStatus('review');
+      setReviewStep('subjects');
     } catch (err) {
       setError('Scan failed: ' + (err instanceof Error ? err.message : String(err)));
       setScanStatus('idle');
@@ -1373,12 +1378,52 @@ export default function FocusSelector() {
 
   if (!videoId) return null;
 
+  const overallStep = scanStatus === 'idle' && focusPoints.length === 0
+    ? 'start'
+    : scanStatus === 'scanning'
+    ? 'scanning'
+    : (scanStatus === 'review' || scanStatus === 'finalizing')
+    ? 'review'
+    : 'done';
+
+  const STEPS = [
+    { key: 'start', label: '1. Scan', description: 'Find subjects' },
+    { key: 'scanning', label: '...', description: 'Scanning' },
+    { key: 'review', label: '2. Review', description: 'Subjects & AI' },
+    { key: 'done', label: '3. Refine', description: 'Scrub & fix' },
+  ];
+
   return (
     <div className="bg-black-card border-2 border-border-subtle p-4">
-      <h3 className="text-lg font-bold text-red-hot uppercase mb-3">Focus Points</h3>
-      <p className="text-xs text-white-dim mb-3">
-        Available Focus Points: {focusPoints.length}
-      </p>
+      <h3 className="text-lg font-bold text-red-hot uppercase mb-1">Focus Points</h3>
+
+      {/* Step indicator */}
+      <div className="flex items-center gap-1 mb-4">
+        {STEPS.filter(s => s.key !== 'scanning').map((step, i) => {
+          const stepKeys = ['start', 'review', 'done'];
+          const currentIdx = stepKeys.indexOf(overallStep === 'scanning' ? 'start' : overallStep);
+          const thisIdx = i;
+          const isActive = thisIdx === currentIdx;
+          const isComplete = thisIdx < currentIdx;
+          return (
+            <React.Fragment key={step.key}>
+              {i > 0 && (
+                <div className={`flex-1 h-0.5 ${isComplete ? 'bg-orange-accent' : 'bg-border-subtle'}`} />
+              )}
+              <div className="flex items-center gap-1.5">
+                <div className={`w-6 h-6 flex items-center justify-center text-[10px] font-bold ${
+                  isActive ? 'bg-orange-accent text-white' : isComplete ? 'bg-orange-accent/30 text-orange-accent' : 'bg-black-deep text-white-dim border border-border-subtle'
+                }`}>
+                  {isComplete ? '✓' : i + 1}
+                </div>
+                <span className={`text-[10px] uppercase tracking-wide ${isActive ? 'text-orange-accent font-bold' : 'text-white-dim'}`}>
+                  {step.description}
+                </span>
+              </div>
+            </React.Fragment>
+          );
+        })}
+      </div>
 
       {/* Live scan canvas overlay */}
       <canvas
@@ -1737,53 +1782,183 @@ export default function FocusSelector() {
         </div>
       )}
 
-      {/* Review state: show detected subjects for accept/reject */}
+      {/* Review state: guided step-by-step flow */}
       {(scanStatus === 'review' || scanStatus === 'finalizing') && (
-        <div className="mt-3">
-          <h4 className="text-sm font-bold text-red-hot uppercase mb-2">Review Detected Subjects</h4>
-          <p className="text-xs text-white-dim mb-3">
-            {detectedSubjects.length > 0
-              ? `${detectedSubjects.length} subject${detectedSubjects.length !== 1 ? 's' : ''} detected. Accept or reject each subject.`
-              : 'No subjects detected. Try lowering the confidence threshold in Advanced Settings, or add focus points manually.'}
-          </p>
-
-          <div className="flex gap-2 mb-4 flex-wrap">
-            <button
-              onClick={finalize}
-              disabled={scanStatus === 'finalizing' || acceptedIds.size === 0}
-              className="px-4 py-1.5 bg-orange-accent text-white text-xs font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {scanStatus === 'finalizing' ? 'Finalizing...' : `Use ${acceptedIds.size} Subjects`}
-            </button>
-            <button
-              onClick={cancelReview}
-              className="px-3 py-1.5 bg-black-card text-white-muted text-xs font-bold uppercase tracking-wide border border-border-subtle hover:border-red-hot transition-all"
-            >
-              Cancel
-            </button>
-            <span className="text-[10px] text-white-dim self-center ml-auto">
-              Click name to rename • drag box to reposition • drag corner to resize
-            </span>
+        <div className="mt-1">
+          {/* Review sub-step tabs */}
+          <div className="flex mb-4 border-b border-border-subtle">
+            {[
+              { key: 'subjects' as const, label: 'Subjects', count: acceptedIds.size },
+              { key: 'story' as const, label: 'Story', count: (storyBrief ? 1 : 0) + annotations.length },
+              { key: 'ai' as const, label: 'AI Reframe', count: aiStrategy ? aiStrategy.segments.length : 0 },
+              { key: 'adjust' as const, label: 'QA & Fix', count: cropReviews ? cropReviews.filter(r => r.quality !== 'good').length : 0 },
+            ].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setReviewStep(tab.key)}
+                className={`flex-1 py-2.5 text-xs font-bold uppercase tracking-wide text-center transition-all relative ${
+                  reviewStep === tab.key
+                    ? 'text-orange-accent'
+                    : 'text-white-dim hover:text-white-muted'
+                }`}
+              >
+                {tab.label}
+                {tab.count > 0 && (
+                  <span className={`ml-1 px-1.5 py-0.5 text-[9px] rounded-sm ${
+                    reviewStep === tab.key ? 'bg-orange-accent text-white' : 'bg-border-subtle text-white-dim'
+                  }`}>
+                    {tab.count}
+                  </span>
+                )}
+                {reviewStep === tab.key && (
+                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-orange-accent" />
+                )}
+              </button>
+            ))}
           </div>
 
-          {/* Story Brief */}
-          <div className="mb-4 p-3 bg-black-deep border border-border-subtle">
-            <button
-              onClick={() => setBriefExpanded(!briefExpanded)}
-              className="flex items-center gap-2 w-full text-left"
-            >
-              {briefExpanded ? <ChevronDown className="w-4 h-4 text-orange-accent" /> : <ChevronRight className="w-4 h-4 text-orange-accent" />}
-              <BookOpen className="w-4 h-4 text-orange-accent" />
-              <span className="text-xs font-bold text-orange-accent uppercase tracking-wide">Story Brief</span>
-              {storyBrief && !briefExpanded && (
-                <span className="text-[10px] text-white-dim ml-auto truncate max-w-[200px]">{storyBrief}</span>
-              )}
-            </button>
-            {briefExpanded && (
-              <div className="mt-2">
+          {/* ---- STEP: SUBJECTS ---- */}
+          {reviewStep === 'subjects' && (
+            <div>
+              <div className="p-3 bg-black-deep border border-border-subtle mb-4">
+                <p className="text-sm text-white-muted mb-1">
+                  <span className="text-orange-accent font-bold">{detectedSubjects.length}</span> subjects found.
+                  Remove any the AI should ignore.
+                </p>
+                <p className="text-[10px] text-white-dim">
+                  Click name to rename. Drag box to reposition. Drag corner to resize.
+                </p>
+              </div>
+
+          {/* Subject cards — inside 'subjects' step */}
+          {reviewStep === 'subjects' && (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                {detectedSubjects.map(subject => {
+                  const isRejected = rejectedIds.has(subject.id);
+                  const isEditing = editingSubjectId === subject.id;
+                  const refPos = subject.positions[0];
+
+                  return (
+                    <div
+                      key={subject.id}
+                      className={`overflow-hidden p-3 transition-all ${
+                        isRejected
+                          ? 'border-2 border-red-hot/30 bg-black-card opacity-40'
+                          : 'border-2 border-orange-accent bg-black-deep'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        {isEditing ? (
+                          <input
+                            type="text"
+                            value={editingName}
+                            onChange={e => setEditingName(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') renameSubject(subject.id, editingName); if (e.key === 'Escape') setEditingSubjectId(null); }}
+                            onBlur={() => renameSubject(subject.id, editingName)}
+                            className="flex-1 bg-black-card border border-orange-accent text-white-full text-sm px-2 py-0.5 font-bold"
+                            autoFocus
+                          />
+                        ) : (
+                          <button
+                            onClick={() => { setEditingSubjectId(subject.id); setEditingName(subject.class); }}
+                            className="flex items-center gap-1.5 text-left group"
+                            title="Click to rename"
+                          >
+                            <h4 className="font-bold text-white-muted capitalize text-sm group-hover:text-orange-accent transition-colors">{subject.class}</h4>
+                            <Type className="w-3 h-3 text-white-dim/30 group-hover:text-orange-accent transition-colors" />
+                          </button>
+                        )}
+                        <span className="ml-auto text-[10px] bg-black-deep text-orange-accent border border-orange-accent px-1.5 py-0.5 shrink-0">
+                          {subject.positions.length}f
+                        </span>
+                      </div>
+
+                      <div className="text-[10px] text-white-dim mb-2">
+                        {formatTime(subject.first_seen)} — {formatTime(subject.last_seen)} ({formatTime(subject.last_seen - subject.first_seen)})
+                      </div>
+
+                      {thumbnails.has(subject.id) ? (
+                        <div
+                          className="mb-2 border border-border-subtle overflow-hidden relative select-none"
+                          ref={el => { if (el) el.dataset.subjectId = subject.id; }}
+                        >
+                          <img src={thumbnails.get(subject.id)} alt={subject.class} className="w-full pointer-events-none" draggable={false} />
+                          {refPos && (
+                            <div
+                              className="absolute border-2 border-orange-accent bg-orange-accent/10 cursor-move group"
+                              style={{ left: `${refPos.bbox[0]}%`, top: `${refPos.bbox[1]}%`, width: `${refPos.bbox[2]}%`, height: `${refPos.bbox[3]}%` }}
+                              onMouseDown={e => { handleSubjectDragStart(e, subject.id, 'move', e.currentTarget.parentElement as HTMLDivElement); }}
+                            >
+                              <Move className="absolute top-0.5 left-0.5 w-3 h-3 text-orange-accent opacity-60 group-hover:opacity-100" />
+                              <div
+                                className="absolute -bottom-1 -right-1 w-3 h-3 bg-orange-accent cursor-se-resize"
+                                onMouseDown={e => { e.stopPropagation(); handleSubjectDragStart(e, subject.id, 'resize', e.currentTarget.parentElement!.parentElement as HTMLDivElement); }}
+                              >
+                                <Maximize2 className="w-2.5 h-2.5 text-black m-px" />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="mb-2 h-16 bg-black-deep border border-border-subtle flex items-center justify-center">
+                          <span className="text-xs text-white-dim">No preview</span>
+                        </div>
+                      )}
+
+                      <button
+                        onClick={() => isRejected ? acceptSubject(subject.id) : rejectSubject(subject.id)}
+                        className={`w-full px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide transition-all ${
+                          isRejected
+                            ? 'border border-border-subtle text-white-dim hover:border-orange-accent hover:text-orange-accent'
+                            : 'border border-red-hot/30 text-red-hot/60 hover:bg-red-hot hover:text-white hover:border-red-hot'
+                        }`}
+                      >
+                        {isRejected ? 'Restore' : 'Remove'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Next step button */}
+              <div className="flex gap-2">
+                <button
+                  onClick={cancelReview}
+                  className="px-4 py-2.5 bg-black-card text-white-dim text-xs font-bold uppercase tracking-wide border border-border-subtle hover:border-red-hot transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => setReviewStep('story')}
+                  className="flex-1 px-4 py-2.5 bg-orange-accent text-white text-sm font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all"
+                >
+                  Next: Add Story Context →
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* ---- STEP: STORY ---- */}
+          {reviewStep === 'story' && (
+            <div>
+              <div className="p-3 bg-black-deep border border-border-subtle mb-4">
+                <p className="text-sm text-white-muted mb-1">
+                  <span className="text-orange-accent font-bold">Optional:</span> Help the AI understand your video's story.
+                </p>
+                <p className="text-[10px] text-white-dim">
+                  Add a brief description and annotate key moments the scanner missed. Skip this if the subjects are enough.
+                </p>
+              </div>
+
+              {/* Story Brief — always visible in story step */}
+              <div className="mb-4 p-3 bg-black-deep border border-border-subtle">
+                <div className="flex items-center gap-2 mb-2">
+                  <BookOpen className="w-4 h-4 text-orange-accent" />
+                  <span className="text-xs font-bold text-orange-accent uppercase tracking-wide">Story Brief</span>
+                </div>
                 <p className="text-[10px] text-white-dim mb-2">
                   Describe the video's story, what matters editorially, and what the AI should prioritize.
-                  This overrides detection confidence when making framing decisions.
                 </p>
                 <textarea
                   value={storyBrief}
@@ -1793,8 +1968,6 @@ export default function FocusSelector() {
                   rows={3}
                 />
               </div>
-            )}
-          </div>
 
           {/* Key Frame Strip + Annotation */}
           {keyFrames.length > 0 && (
@@ -1973,43 +2146,69 @@ export default function FocusSelector() {
             </div>
           )}
 
-          {/* AI Editor Section */}
-          {detectedSubjects.length > 0 && (
-            <div className="mb-4 p-3 bg-black-deep border border-border-subtle">
-              <div className="flex items-center gap-2 mb-2">
-                <Sparkles className="w-4 h-4 text-orange-accent" />
-                <h5 className="text-xs font-bold text-orange-accent uppercase tracking-wide">AI Focus Editor</h5>
-                {(storyBrief || annotations.length > 0) && (
-                  <span className="text-[10px] text-green-500 ml-auto">
-                    Story-aware {storyBrief ? '+ brief' : ''}{annotations.length > 0 ? ` + ${annotations.length} annotations` : ''}
-                  </span>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2 mb-3">
-                <label className="text-[10px] text-white-dim uppercase tracking-wide shrink-0">Platform:</label>
-                <select
-                  value={targetPlatform}
-                  onChange={(e) => { setTargetPlatform(e.target.value); setAiStrategy(null); }}
-                  className="flex-1 bg-black-card border border-border-subtle text-white-full px-2 py-1 text-xs"
-                >
-                  <option value="tiktok">TikTok (9:16)</option>
-                  <option value="instagram-story">Instagram Story (9:16)</option>
-                  <option value="instagram-feed-square">Instagram Feed Square (1:1)</option>
-                  <option value="instagram-feed-portrait">Instagram Feed Portrait (4:5)</option>
-                  <option value="youtube-shorts">YouTube Shorts (9:16)</option>
-                  <option value="youtube-main">YouTube Main (16:9)</option>
-                  <option value="facebook-story">Facebook Story (9:16)</option>
-                  <option value="facebook-feed">Facebook Feed (1:1)</option>
-                </select>
+              {/* Story step: Next button */}
+              <div className="flex gap-2 mt-4">
                 <button
-                  onClick={requestAISuggestion}
-                  disabled={aiLoading}
-                  className="px-3 py-1.5 bg-orange-accent text-white text-xs font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 shrink-0"
+                  onClick={() => setReviewStep('subjects')}
+                  className="px-4 py-2.5 bg-black-card text-white-dim text-xs font-bold uppercase tracking-wide border border-border-subtle hover:border-orange-accent transition-all"
                 >
-                  <Sparkles className="w-3 h-3" />
-                  {aiLoading ? 'Analyzing...' : 'AI Suggest'}
+                  ← Back
                 </button>
+                <button
+                  onClick={() => setReviewStep('ai')}
+                  className="flex-1 px-4 py-2.5 bg-orange-accent text-white text-sm font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all"
+                >
+                  Next: Generate AI Reframe →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ---- STEP: AI REFRAME ---- */}
+          {reviewStep === 'ai' && (
+            <div>
+              <div className="mb-4 p-3 bg-black-deep border border-border-subtle">
+                <div className="flex items-center gap-2 mb-2">
+                  <Sparkles className="w-4 h-4 text-orange-accent" />
+                  <h5 className="text-sm font-bold text-orange-accent uppercase tracking-wide">AI Reframe</h5>
+                  {(storyBrief || annotations.length > 0) && (
+                    <span className="text-[10px] text-green-500 ml-auto">
+                      Story-aware {storyBrief ? '+ brief' : ''}{annotations.length > 0 ? ` + ${annotations.length} annotations` : ''}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-white-dim mb-3">
+                  Choose a platform and let the AI generate a framing strategy for your {acceptedIds.size} subjects.
+                </p>
+
+                <div className="flex items-center gap-2 mb-3">
+                  <label className="text-[10px] text-white-dim uppercase tracking-wide shrink-0">Platform:</label>
+                  <select
+                    value={targetPlatform}
+                    onChange={(e) => { setTargetPlatform(e.target.value); setAiStrategy(null); }}
+                    className="flex-1 bg-black-card border border-border-subtle text-white-full px-2 py-1 text-xs"
+                  >
+                    <option value="tiktok">TikTok (9:16)</option>
+                    <option value="instagram-story">Instagram Story (9:16)</option>
+                    <option value="instagram-feed-square">Instagram Feed Square (1:1)</option>
+                    <option value="instagram-feed-portrait">Instagram Feed Portrait (4:5)</option>
+                    <option value="youtube-shorts">YouTube Shorts (9:16)</option>
+                    <option value="youtube-main">YouTube Main (16:9)</option>
+                    <option value="facebook-story">Facebook Story (9:16)</option>
+                    <option value="facebook-feed">Facebook Feed (1:1)</option>
+                  </select>
+                </div>
+
+                {!aiStrategy && (
+                  <button
+                    onClick={requestAISuggestion}
+                    disabled={aiLoading}
+                    className="w-full px-4 py-3 bg-orange-accent text-white text-sm font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    {aiLoading ? 'AI is analyzing your video...' : 'Generate AI Reframe Strategy'}
+                  </button>
+                )}
               </div>
 
               {/* AI Strategy Results */}
@@ -2067,367 +2266,325 @@ export default function FocusSelector() {
                     </div>
                   )}
 
-                  {/* QA summary bar */}
-                  {cropReviews && !reviewLoading && (
-                    <div className="flex items-center gap-2 p-2 bg-black-card border border-border-subtle">
-                      <ShieldCheck className="w-4 h-4 text-green-500 shrink-0" />
-                      <span className="text-xs font-bold text-white-muted uppercase">QA:</span>
-                      <span className="text-xs text-green-500">{cropReviews.filter(r => r.quality === 'good').length} good</span>
-                      {cropReviews.some(r => r.quality === 'needs_adjustment') && (
-                        <span className="text-xs text-yellow-500">{cropReviews.filter(r => r.quality === 'needs_adjustment').length} adjust</span>
-                      )}
-                      {cropReviews.some(r => r.quality === 'bad') && (
-                        <span className="text-xs text-red-hot">{cropReviews.filter(r => r.quality === 'bad').length} bad</span>
-                      )}
-                      <span className="text-[10px] text-white-dim ml-auto">Click a segment to adjust</span>
-                    </div>
-                  )}
-
-                  {/* Unified segment list — each segment shows QA + sliders in one place */}
-                  <div className="max-h-[500px] overflow-y-auto space-y-1">
-                    {aiStrategy.segments.map((seg, idx) => {
-                      const review = cropReviews?.[idx];
-                      const isExpanded = expandedSegIdx === idx;
-                      const hasProblem = review && review.quality !== 'good';
-                      const qualityBorder = review
-                        ? review.quality === 'good' ? 'border-green-500/30' : review.quality === 'bad' ? 'border-red-hot/40' : 'border-yellow-500/40'
-                        : 'border-border-subtle';
-                      const qualityBg = review
-                        ? review.quality === 'good' ? '' : review.quality === 'bad' ? 'bg-red-hot/5' : 'bg-yellow-500/5'
-                        : '';
-
-                      return (
-                        <div key={idx} className={`bg-black-card border ${qualityBorder} ${qualityBg} transition-all`}>
-                          {/* Segment header row */}
-                          <div
-                            className="flex items-center gap-2 text-[10px] p-2 cursor-pointer hover:bg-black-deep/50"
-                            onClick={() => { setExpandedSegIdx(isExpanded ? null : idx); seekToFrame((seg.time_start + seg.time_end) / 2); }}
-                          >
-                            {review ? (
-                              <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                                review.quality === 'good' ? 'bg-green-500' : review.quality === 'bad' ? 'bg-red-hot' : 'bg-yellow-500'
-                              }`} />
-                            ) : (
-                              <div className="w-2.5 h-2.5 rounded-full shrink-0 bg-border-subtle" />
-                            )}
-                            <span className="text-white-dim font-mono shrink-0">
-                              {seg.time_start.toFixed(1)}s
-                            </span>
-                            <span className="text-orange-accent font-bold uppercase truncate">{seg.follow_subject}</span>
-                            <div className="ml-auto flex items-center gap-1.5 shrink-0">
-                              {hasProblem && (
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); autoFixSegment(idx); }}
-                                  className="px-2 py-0.5 text-[9px] font-bold uppercase text-black bg-yellow-500 hover:bg-yellow-400 transition-colors flex items-center gap-1"
-                                >
-                                  <Wrench className="w-2.5 h-2.5" />
-                                  Fix
-                                </button>
-                              )}
-                              <SlidersHorizontal className={`w-3.5 h-3.5 ${isExpanded ? 'text-orange-accent' : 'text-white-dim/40'}`} />
-                            </div>
-                          </div>
-
-                          {/* Expanded: preview + sliders + next action */}
-                          {isExpanded && (() => {
-                            const nextFlaggedIdx = cropReviews
-                              ? cropReviews.findIndex((r, i) => i > idx && r.quality !== 'good')
-                              : -1;
-                            const prevFlaggedCount = cropReviews
-                              ? cropReviews.filter(r => r.quality !== 'good').length
-                              : 0;
-
-                            return (
-                            <div className="px-3 pb-3 space-y-3 border-t border-border-subtle/50">
-                              {/* Hero: Live crop preview — big, centered, clearly labeled */}
-                              <div className="mt-3">
-                                <div className="flex items-center gap-2 mb-2">
-                                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                                  <span className="text-[10px] font-bold text-white-muted uppercase tracking-wide">Live Preview — updates as you adjust</span>
-                                </div>
-                                <div className="flex justify-center">
-                                  <div className={`border-2 ${
-                                    review
-                                      ? review.quality === 'good' ? 'border-green-500' : review.quality === 'bad' ? 'border-red-hot' : 'border-yellow-500'
-                                      : 'border-orange-accent'
-                                  }`}>
-                                    <canvas
-                                      ref={el => {
-                                        if (el) {
-                                          liveCropCanvasRef.current = el;
-                                          requestAnimationFrame(() => renderLiveCrop(idx));
-                                        }
-                                      }}
-                                      className="w-[180px] h-auto"
-                                      style={{ display: 'block' }}
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-
-                              {/* QA feedback — compact, below preview */}
-                              {review && review.quality !== 'good' && review.issues.length > 0 && (
-                                <div className={`p-2 border ${review.quality === 'bad' ? 'border-red-hot/30 bg-red-hot/5' : 'border-yellow-500/30 bg-yellow-500/5'}`}>
-                                  {review.issues.map((issue, i) => (
-                                    <div key={i} className="text-[10px] text-white-dim flex items-start gap-1">
-                                      <span className={review.quality === 'bad' ? 'text-red-hot' : 'text-yellow-500'}>•</span>
-                                      <span>{issue}</span>
-                                    </div>
-                                  ))}
-                                  {review.suggestion && (
-                                    <div className="mt-1 text-[10px] text-green-500 font-medium">{review.suggestion}</div>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* Sliders — compact layout */}
-                              <div className="space-y-2">
-                                <div>
-                                  <div className="flex items-center justify-between">
-                                    <label className="text-[10px] text-white-dim">← Left / Right →</label>
-                                    <span className="text-[10px] text-orange-accent font-mono font-bold">{seg.offset_x > 0 ? '+' : ''}{seg.offset_x}</span>
-                                  </div>
-                                  <input
-                                    type="range" min={-50} max={50} step={1} value={seg.offset_x}
-                                    onChange={e => updateSegmentOffset(idx, 'offset_x', parseInt(e.target.value))}
-                                    className="w-full h-2 accent-orange-accent cursor-pointer"
-                                  />
-                                </div>
-                                <div>
-                                  <div className="flex items-center justify-between">
-                                    <label className="text-[10px] text-white-dim">↑ Up / Down ↓</label>
-                                    <span className="text-[10px] text-orange-accent font-mono font-bold">{seg.offset_y > 0 ? '+' : ''}{seg.offset_y}</span>
-                                  </div>
-                                  <input
-                                    type="range" min={-50} max={50} step={1} value={seg.offset_y}
-                                    onChange={e => updateSegmentOffset(idx, 'offset_y', parseInt(e.target.value))}
-                                    className="w-full h-2 accent-orange-accent cursor-pointer"
-                                  />
-                                </div>
-                              </div>
-
-                              {/* Action bar: Reset, Auto-fix, Done/Next */}
-                              <div className="flex items-center gap-2 pt-1">
-                                <button
-                                  onClick={() => { updateSegmentOffset(idx, 'offset_x', 0); updateSegmentOffset(idx, 'offset_y', 0); }}
-                                  className="px-2 py-1 text-[10px] text-white-dim border border-border-subtle hover:border-orange-accent transition-colors"
-                                >
-                                  Reset
-                                </button>
-                                {hasProblem && (
-                                  <button
-                                    onClick={() => autoFixSegment(idx)}
-                                    className="px-2 py-1 text-[10px] font-bold text-black bg-yellow-500 hover:bg-yellow-400 transition-colors flex items-center gap-1"
-                                  >
-                                    <Wrench className="w-3 h-3" />
-                                    Auto-fix
-                                  </button>
-                                )}
-                                <div className="flex-1" />
-                                {nextFlaggedIdx >= 0 ? (
-                                  <button
-                                    onClick={() => { setExpandedSegIdx(nextFlaggedIdx); seekToFrame((aiStrategy.segments[nextFlaggedIdx].time_start + aiStrategy.segments[nextFlaggedIdx].time_end) / 2); }}
-                                    className="px-3 py-1.5 text-[10px] font-bold uppercase text-white bg-orange-accent hover:bg-red-hot transition-colors flex items-center gap-1"
-                                  >
-                                    Done — Next Issue →
-                                  </button>
-                                ) : prevFlaggedCount > 0 ? (
-                                  <button
-                                    onClick={() => { setExpandedSegIdx(null); }}
-                                    className="px-3 py-1.5 text-[10px] font-bold uppercase text-white bg-green-600 hover:bg-green-500 transition-colors flex items-center gap-1"
-                                  >
-                                    <ShieldCheck className="w-3 h-3" />
-                                    All Fixed — Done
-                                  </button>
-                                ) : (
-                                  <button
-                                    onClick={() => setExpandedSegIdx(null)}
-                                    className="px-3 py-1.5 text-[10px] font-bold uppercase text-white-dim border border-border-subtle hover:border-orange-accent transition-colors"
-                                  >
-                                    Done
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                            );
-                          })()}
-                        </div>
-                      );
-                    })}
+                  {/* Segment count summary */}
+                  <div className="flex items-center gap-3 p-2 bg-black-card border border-border-subtle">
+                    <span className="text-sm text-orange-accent font-bold">{aiStrategy.segments.length} segments</span>
+                    {gapInfo.count > 0 && (
+                      <span className="text-xs text-yellow-500">{gapInfo.count} gap{gapInfo.count > 1 ? 's' : ''}</span>
+                    )}
+                    {gapInfo.count === 0 && (
+                      <span className="text-xs text-green-500">100% covered</span>
+                    )}
                   </div>
-
-                  {/* Gap coverage warning */}
-                  {gapInfo.count > 0 && (
-                    <div className="flex items-center gap-2 p-2 bg-yellow-500/10 border border-yellow-500/30">
-                      <AlertTriangle className="w-4 h-4 text-yellow-500 shrink-0" />
-                      <span className="text-[10px] text-yellow-500">
-                        {gapInfo.count} gap{gapInfo.count > 1 ? 's' : ''} ({Math.round(gapInfo.totalSeconds)}s uncovered) — these frames will default to center crop
-                      </span>
-                      <button
-                        onClick={fillGaps}
-                        className="ml-auto px-2 py-1 text-[10px] font-bold uppercase text-black bg-yellow-500 hover:bg-yellow-400 transition-colors shrink-0"
-                      >
-                        Fill Gaps
-                      </button>
-                    </div>
-                  )}
 
                   {/* Action buttons */}
                   <div className="flex gap-2">
                     <button
-                      onClick={applyAIStrategy}
-                      className="flex-1 px-3 py-2.5 bg-orange-accent text-white text-xs font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all flex items-center justify-center gap-2"
+                      onClick={() => setReviewStep('story')}
+                      className="px-4 py-2.5 bg-black-card text-white-dim text-xs font-bold uppercase tracking-wide border border-border-subtle hover:border-orange-accent transition-all"
                     >
-                      <Sparkles className="w-3 h-3" />
-                      Apply ({aiStrategy.segments.length} segments)
+                      ← Back
                     </button>
                     <button
-                      onClick={runCropReview}
+                      onClick={() => { runCropReview(); setReviewStep('adjust'); }}
                       disabled={reviewLoading}
-                      className="px-3 py-2.5 bg-black-card text-white text-xs font-bold uppercase tracking-wide border-2 border-green-500 hover:bg-green-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                      className="flex-1 px-4 py-2.5 bg-orange-accent text-white text-sm font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                     >
-                      <ShieldCheck className="w-3 h-3 text-green-500" />
-                      {reviewLoading ? 'Reviewing...' : cropReviews ? 'Re-check' : 'QA Review'}
+                      <ShieldCheck className="w-4 h-4" />
+                      Next: Check Quality →
                     </button>
                   </div>
-
-                  {/* Loading state */}
-                  {reviewLoading && (
-                    <div className="p-3 bg-black-card border border-border-subtle">
-                      <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 border-2 border-green-500 border-t-transparent rounded-full animate-spin" />
-                        <span className="text-xs text-white-dim">AI is reviewing each cropped frame for composition issues...</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Re-generate flagged button */}
-                  {cropReviews && !reviewLoading && cropReviews.some(r => r.quality !== 'good') && (
-                    <button
-                      onClick={regenFlaggedSegments}
-                      disabled={aiLoading}
-                      className="w-full px-3 py-2 bg-black-card text-white text-xs font-bold uppercase tracking-wide border-2 border-yellow-500 hover:bg-yellow-500/10 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <RefreshCw className={`w-3 h-3 text-yellow-500 ${aiLoading ? 'animate-spin' : ''}`} />
-                      {aiLoading ? 'Re-generating...' : `Re-generate ${cropReviews.filter(r => r.quality !== 'good').length} flagged with AI`}
-                    </button>
-                  )}
+                  <button
+                    onClick={applyAIStrategy}
+                    className="w-full px-3 py-2 text-xs text-white-dim font-bold uppercase tracking-wide border border-border-subtle hover:border-orange-accent hover:text-orange-accent transition-all text-center"
+                  >
+                    Skip QA — Apply directly
+                  </button>
                 </div>
               )}
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {detectedSubjects.map(subject => {
-              const isRejected = rejectedIds.has(subject.id);
-              const isEditing = editingSubjectId === subject.id;
-              const refPos = subject.positions[0];
+          {/* ---- STEP: ADJUST (QA & Fix) ---- */}
+          {reviewStep === 'adjust' && aiStrategy && (
+            <div>
+              <div className="p-3 bg-black-deep border border-border-subtle mb-4">
+                <p className="text-sm text-white-muted mb-1">
+                  <span className="text-orange-accent font-bold">Review & adjust</span> the AI's framing decisions.
+                </p>
+                <p className="text-[10px] text-white-dim">
+                  The AI checked each crop for composition issues. Fix flagged segments, then apply.
+                </p>
+              </div>
 
-              return (
-                <div
-                  key={subject.id}
-                  className={`overflow-hidden p-3 transition-all ${
-                    isRejected
-                      ? 'border-2 border-red-hot/30 bg-black-card opacity-40'
-                      : 'border-2 border-orange-accent bg-black-deep'
-                  }`}
-                >
-                  {/* Name — editable */}
-                  <div className="flex items-center gap-2 mb-2">
-                    {isEditing ? (
-                      <input
-                        type="text"
-                        value={editingName}
-                        onChange={e => setEditingName(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') renameSubject(subject.id, editingName); if (e.key === 'Escape') setEditingSubjectId(null); }}
-                        onBlur={() => renameSubject(subject.id, editingName)}
-                        className="flex-1 bg-black-card border border-orange-accent text-white-full text-sm px-2 py-0.5 font-bold"
-                        autoFocus
-                      />
-                    ) : (
-                      <button
-                        onClick={() => { setEditingSubjectId(subject.id); setEditingName(subject.class); }}
-                        className="flex items-center gap-1.5 text-left group"
-                        title="Click to rename"
-                      >
-                        <h4 className="font-bold text-white-muted capitalize text-sm group-hover:text-orange-accent transition-colors">{subject.class}</h4>
-                        <Type className="w-3 h-3 text-white-dim/30 group-hover:text-orange-accent transition-colors" />
-                      </button>
+              {/* Loading state */}
+              {reviewLoading && (
+                <div className="p-4 bg-black-card border border-border-subtle mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-4 h-4 border-2 border-green-500 border-t-transparent rounded-full animate-spin" />
+                    <span className="text-sm text-white-muted">AI is reviewing each cropped frame for composition issues...</span>
+                  </div>
+                </div>
+              )}
+
+              {/* QA summary */}
+              {cropReviews && !reviewLoading && (
+                <div className="flex items-center gap-3 p-3 bg-black-card border border-border-subtle mb-4">
+                  <ShieldCheck className="w-5 h-5 text-green-500 shrink-0" />
+                  <div className="flex items-center gap-3 text-sm">
+                    <span className="text-green-500 font-bold">{cropReviews.filter(r => r.quality === 'good').length} good</span>
+                    {cropReviews.some(r => r.quality === 'needs_adjustment') && (
+                      <span className="text-yellow-500 font-bold">{cropReviews.filter(r => r.quality === 'needs_adjustment').length} need adjustment</span>
                     )}
-                    <span className="ml-auto text-[10px] bg-black-deep text-orange-accent border border-orange-accent px-1.5 py-0.5 shrink-0">
-                      {subject.positions.length}f
-                    </span>
+                    {cropReviews.some(r => r.quality === 'bad') && (
+                      <span className="text-red-hot font-bold">{cropReviews.filter(r => r.quality === 'bad').length} problems</span>
+                    )}
                   </div>
+                </div>
+              )}
 
-                  <div className="text-[10px] text-white-dim mb-2">
-                    {formatTime(subject.first_seen)} — {formatTime(subject.last_seen)} ({formatTime(subject.last_seen - subject.first_seen)})
-                  </div>
-
-                  {/* Thumbnail with draggable bbox overlay */}
-                  {thumbnails.has(subject.id) ? (
-                    <div
-                      className="mb-2 border border-border-subtle overflow-hidden relative select-none"
-                      ref={el => {
-                        if (el) el.dataset.subjectId = subject.id;
-                      }}
-                    >
-                      <img
-                        src={thumbnails.get(subject.id)}
-                        alt={subject.class}
-                        className="w-full pointer-events-none"
-                        draggable={false}
-                      />
-                      {/* Bbox overlay — draggable to move */}
-                      {refPos && (
+              {/* Coverage timeline */}
+              {duration > 0 && (
+                <div className="mb-3">
+                  <div className="relative w-full h-3 bg-red-hot/30 border border-border-subtle">
+                    {aiStrategy.segments.map((seg, i) => {
+                      const left = (seg.time_start / duration) * 100;
+                      const width = Math.max(0.3, ((seg.time_end - seg.time_start) / duration) * 100);
+                      const review = cropReviews?.[i];
+                      const color = review
+                        ? review.quality === 'good' ? 'bg-green-500' : review.quality === 'bad' ? 'bg-red-hot' : 'bg-yellow-500'
+                        : 'bg-orange-accent';
+                      return (
                         <div
-                          className="absolute border-2 border-orange-accent bg-orange-accent/10 cursor-move group"
-                          style={{
-                            left: `${refPos.bbox[0]}%`,
-                            top: `${refPos.bbox[1]}%`,
-                            width: `${refPos.bbox[2]}%`,
-                            height: `${refPos.bbox[3]}%`,
-                          }}
-                          onMouseDown={e => {
-                            const container = (e.currentTarget.parentElement as HTMLDivElement);
-                            handleSubjectDragStart(e, subject.id, 'move', container);
-                          }}
-                        >
-                          <Move className="absolute top-0.5 left-0.5 w-3 h-3 text-orange-accent opacity-60 group-hover:opacity-100" />
-                          {/* Resize handle — bottom-right corner */}
-                          <div
-                            className="absolute -bottom-1 -right-1 w-3 h-3 bg-orange-accent cursor-se-resize"
-                            onMouseDown={e => {
-                              e.stopPropagation();
-                              const container = (e.currentTarget.parentElement!.parentElement as HTMLDivElement);
-                              handleSubjectDragStart(e, subject.id, 'resize', container);
-                            }}
-                          >
-                            <Maximize2 className="w-2.5 h-2.5 text-black m-px" />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="mb-2 h-16 bg-black-deep border border-border-subtle flex items-center justify-center">
-                      <span className="text-xs text-white-dim">No preview</span>
-                    </div>
-                  )}
+                          key={i}
+                          className={`absolute top-0 h-full ${color} cursor-pointer hover:opacity-80 transition-opacity`}
+                          style={{ left: `${left}%`, width: `${width}%` }}
+                          onClick={() => { setExpandedSegIdx(i); seekToFrame((seg.time_start + seg.time_end) / 2); }}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
-                  {/* Keep / Remove toggle */}
+              {/* Gap fill */}
+              {gapInfo.count > 0 && (
+                <div className="flex items-center gap-2 p-2 bg-yellow-500/10 border border-yellow-500/30 mb-3">
+                  <AlertTriangle className="w-4 h-4 text-yellow-500 shrink-0" />
+                  <span className="text-xs text-yellow-500">
+                    {gapInfo.count} gap{gapInfo.count > 1 ? 's' : ''} ({Math.round(gapInfo.totalSeconds)}s uncovered)
+                  </span>
                   <button
-                    onClick={() => isRejected ? acceptSubject(subject.id) : rejectSubject(subject.id)}
-                    className={`w-full px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide transition-all ${
-                      isRejected
-                        ? 'border border-border-subtle text-white-dim hover:border-orange-accent hover:text-orange-accent'
-                        : 'border border-red-hot/30 text-red-hot/60 hover:bg-red-hot hover:text-white hover:border-red-hot'
-                    }`}
+                    onClick={fillGaps}
+                    className="ml-auto px-3 py-1 text-xs font-bold uppercase text-black bg-yellow-500 hover:bg-yellow-400 transition-colors shrink-0"
                   >
-                    {isRejected ? 'Restore' : 'Remove'}
+                    Fill Gaps
                   </button>
                 </div>
-              );
-            })}
-          </div>
+              )}
+
+              {/* Segment list — click to expand & adjust */}
+              <div className="max-h-[500px] overflow-y-auto space-y-1 mb-4">
+                {aiStrategy.segments.map((seg, idx) => {
+                  const review = cropReviews?.[idx];
+                  const isExpanded = expandedSegIdx === idx;
+                  const hasProblem = review && review.quality !== 'good';
+                  const qualityBorder = review
+                    ? review.quality === 'good' ? 'border-green-500/30' : review.quality === 'bad' ? 'border-red-hot/40' : 'border-yellow-500/40'
+                    : 'border-border-subtle';
+
+                  return (
+                    <div key={idx} className={`bg-black-card border ${qualityBorder} transition-all`}>
+                      <div
+                        className="flex items-center gap-2 text-xs p-2.5 cursor-pointer hover:bg-black-deep/50"
+                        onClick={() => { setExpandedSegIdx(isExpanded ? null : idx); seekToFrame((seg.time_start + seg.time_end) / 2); }}
+                      >
+                        {review ? (
+                          <div className={`w-3 h-3 rounded-full shrink-0 ${
+                            review.quality === 'good' ? 'bg-green-500' : review.quality === 'bad' ? 'bg-red-hot' : 'bg-yellow-500'
+                          }`} />
+                        ) : (
+                          <div className="w-3 h-3 rounded-full shrink-0 bg-border-subtle" />
+                        )}
+                        <span className="text-white-dim font-mono shrink-0">
+                          {formatTime(seg.time_start)}
+                        </span>
+                        <span className="text-orange-accent font-bold uppercase truncate">{seg.follow_subject}</span>
+                        <div className="ml-auto flex items-center gap-1.5 shrink-0">
+                          {hasProblem && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); autoFixSegment(idx); }}
+                              className="px-2 py-0.5 text-[10px] font-bold uppercase text-black bg-yellow-500 hover:bg-yellow-400 transition-colors flex items-center gap-1"
+                            >
+                              <Wrench className="w-2.5 h-2.5" />
+                              Fix
+                            </button>
+                          )}
+                          <SlidersHorizontal className={`w-4 h-4 ${isExpanded ? 'text-orange-accent' : 'text-white-dim/40'}`} />
+                        </div>
+                      </div>
+
+                      {isExpanded && (() => {
+                        const nextFlaggedIdx = cropReviews
+                          ? cropReviews.findIndex((r, i) => i > idx && r.quality !== 'good')
+                          : -1;
+                        const prevFlaggedCount = cropReviews
+                          ? cropReviews.filter(r => r.quality !== 'good').length
+                          : 0;
+
+                        return (
+                          <div className="px-3 pb-3 space-y-3 border-t border-border-subtle/50">
+                            <div className="mt-3">
+                              <div className="flex items-center gap-2 mb-2">
+                                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                                <span className="text-xs font-bold text-white-muted uppercase tracking-wide">Live Preview</span>
+                              </div>
+                              <div className="flex justify-center">
+                                <div className={`border-2 ${
+                                  review
+                                    ? review.quality === 'good' ? 'border-green-500' : review.quality === 'bad' ? 'border-red-hot' : 'border-yellow-500'
+                                    : 'border-orange-accent'
+                                }`}>
+                                  <canvas
+                                    ref={el => {
+                                      if (el) {
+                                        liveCropCanvasRef.current = el;
+                                        requestAnimationFrame(() => renderLiveCrop(idx));
+                                      }
+                                    }}
+                                    className="w-[200px] h-auto"
+                                    style={{ display: 'block' }}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            {review && review.quality !== 'good' && review.issues.length > 0 && (
+                              <div className={`p-2 border ${review.quality === 'bad' ? 'border-red-hot/30 bg-red-hot/5' : 'border-yellow-500/30 bg-yellow-500/5'}`}>
+                                {review.issues.map((issue, i) => (
+                                  <div key={i} className="text-xs text-white-dim flex items-start gap-1">
+                                    <span className={review.quality === 'bad' ? 'text-red-hot' : 'text-yellow-500'}>•</span>
+                                    <span>{issue}</span>
+                                  </div>
+                                ))}
+                                {review.suggestion && (
+                                  <div className="mt-1 text-xs text-green-500 font-medium">{review.suggestion}</div>
+                                )}
+                              </div>
+                            )}
+
+                            <div className="space-y-2">
+                              <div>
+                                <div className="flex items-center justify-between">
+                                  <label className="text-xs text-white-dim">← Left / Right →</label>
+                                  <span className="text-xs text-orange-accent font-mono font-bold">{seg.offset_x > 0 ? '+' : ''}{seg.offset_x}</span>
+                                </div>
+                                <input
+                                  type="range" min={-50} max={50} step={1} value={seg.offset_x}
+                                  onChange={e => updateSegmentOffset(idx, 'offset_x', parseInt(e.target.value))}
+                                  className="w-full h-2 accent-orange-accent cursor-pointer"
+                                />
+                              </div>
+                              <div>
+                                <div className="flex items-center justify-between">
+                                  <label className="text-xs text-white-dim">↑ Up / Down ↓</label>
+                                  <span className="text-xs text-orange-accent font-mono font-bold">{seg.offset_y > 0 ? '+' : ''}{seg.offset_y}</span>
+                                </div>
+                                <input
+                                  type="range" min={-50} max={50} step={1} value={seg.offset_y}
+                                  onChange={e => updateSegmentOffset(idx, 'offset_y', parseInt(e.target.value))}
+                                  className="w-full h-2 accent-orange-accent cursor-pointer"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 pt-1">
+                              <button
+                                onClick={() => { updateSegmentOffset(idx, 'offset_x', 0); updateSegmentOffset(idx, 'offset_y', 0); }}
+                                className="px-2 py-1 text-xs text-white-dim border border-border-subtle hover:border-orange-accent transition-colors"
+                              >
+                                Reset
+                              </button>
+                              {hasProblem && (
+                                <button
+                                  onClick={() => autoFixSegment(idx)}
+                                  className="px-2 py-1 text-xs font-bold text-black bg-yellow-500 hover:bg-yellow-400 transition-colors flex items-center gap-1"
+                                >
+                                  <Wrench className="w-3 h-3" />
+                                  Auto-fix
+                                </button>
+                              )}
+                              <div className="flex-1" />
+                              {nextFlaggedIdx >= 0 ? (
+                                <button
+                                  onClick={() => { setExpandedSegIdx(nextFlaggedIdx); seekToFrame((aiStrategy.segments[nextFlaggedIdx].time_start + aiStrategy.segments[nextFlaggedIdx].time_end) / 2); }}
+                                  className="px-3 py-1.5 text-xs font-bold uppercase text-white bg-orange-accent hover:bg-red-hot transition-colors"
+                                >
+                                  Next Issue →
+                                </button>
+                              ) : prevFlaggedCount > 0 ? (
+                                <button
+                                  onClick={() => setExpandedSegIdx(null)}
+                                  className="px-3 py-1.5 text-xs font-bold uppercase text-white bg-green-600 hover:bg-green-500 transition-colors flex items-center gap-1"
+                                >
+                                  <ShieldCheck className="w-3 h-3" />
+                                  All Fixed
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => setExpandedSegIdx(null)}
+                                  className="px-3 py-1.5 text-xs font-bold uppercase text-white-dim border border-border-subtle hover:border-orange-accent transition-colors"
+                                >
+                                  Done
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Re-generate flagged */}
+              {cropReviews && !reviewLoading && cropReviews.some(r => r.quality !== 'good') && (
+                <button
+                  onClick={regenFlaggedSegments}
+                  disabled={aiLoading}
+                  className="w-full px-3 py-2 mb-3 bg-black-card text-white text-xs font-bold uppercase tracking-wide border-2 border-yellow-500 hover:bg-yellow-500/10 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <RefreshCw className={`w-3 h-3 text-yellow-500 ${aiLoading ? 'animate-spin' : ''}`} />
+                  {aiLoading ? 'Re-generating...' : `Re-generate ${cropReviews.filter(r => r.quality !== 'good').length} flagged with AI`}
+                </button>
+              )}
+
+              {/* Re-check + Apply buttons */}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setReviewStep('ai')}
+                  className="px-4 py-2.5 bg-black-card text-white-dim text-xs font-bold uppercase tracking-wide border border-border-subtle hover:border-orange-accent transition-all"
+                >
+                  ← Back
+                </button>
+                <button
+                  onClick={runCropReview}
+                  disabled={reviewLoading}
+                  className="px-4 py-2.5 bg-black-card text-green-500 text-xs font-bold uppercase tracking-wide border-2 border-green-500 hover:bg-green-500/10 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  {cropReviews ? 'Re-check' : 'Run QA'}
+                </button>
+                <button
+                  onClick={applyAIStrategy}
+                  className="flex-1 px-4 py-2.5 bg-orange-accent text-white text-sm font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all flex items-center justify-center gap-2"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  Apply & Finish
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
