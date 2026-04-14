@@ -1139,36 +1139,36 @@ export default function FocusSelector() {
     ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, cW, cH);
   }, [videoElementRef, focusPoints, targetPlatform, scrubEditLocal]);
 
+  // Re-render crop preview when scrubTime or slider edits change
   useEffect(() => {
     if (focusPoints.length === 0) return;
+    requestAnimationFrame(renderScrubCrop);
+  }, [scrubTime, focusPoints, renderScrubCrop, scrubEditLocal]);
+
+  // On initial load, force a micro-seek so the video decodes its first frame
+  useEffect(() => {
+    const video = videoElementRef.current;
+    if (!video || focusPoints.length === 0) return;
+    const kickstart = () => {
+      if (video.currentTime === 0) video.currentTime = 0.01;
+      requestAnimationFrame(renderScrubCrop);
+    };
+    if (video.readyState >= 2) {
+      kickstart();
+    } else {
+      video.addEventListener('loadeddata', kickstart, { once: true });
+      return () => video.removeEventListener('loadeddata', kickstart);
+    }
+  }, [focusPoints.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-render after any seek completes (frame decoded)
+  useEffect(() => {
     const video = videoElementRef.current;
     if (!video) return;
-
-    const tryRender = () => {
-      if (video.readyState >= 2) {
-        requestAnimationFrame(renderScrubCrop);
-      }
-    };
-
-    // Try immediately
-    tryRender();
-
-    // Also try after video loads/seeks (covers initial page load)
-    video.addEventListener('seeked', tryRender);
-    video.addEventListener('loadeddata', tryRender);
-
-    // Force a seek to decode the first frame if video hasn't been touched
-    if (video.readyState < 2) {
-      video.load();
-    } else if (video.paused && video.currentTime === 0) {
-      video.currentTime = 0.01;
-    }
-
-    return () => {
-      video.removeEventListener('seeked', tryRender);
-      video.removeEventListener('loadeddata', tryRender);
-    };
-  }, [scrubTime, focusPoints, scanStatus, renderScrubCrop, scrubEditLocal]);
+    const onSeeked = () => requestAnimationFrame(renderScrubCrop);
+    video.addEventListener('seeked', onSeeked);
+    return () => video.removeEventListener('seeked', onSeeked);
+  }, [videoElementRef, renderScrubCrop]);
 
   const autoFixSegment = useCallback((idx: number) => {
     if (!cropReviews || !cropReviews[idx] || !aiStrategy) return;
