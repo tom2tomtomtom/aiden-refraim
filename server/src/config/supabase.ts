@@ -19,6 +19,9 @@ export const authClient = createClient(
       autoRefreshToken: false,
       persistSession: false,
       detectSessionInUrl: false
+    },
+    db: {
+      schema: 'refraim'
     }
   }
 );
@@ -34,7 +37,7 @@ export const supabase = createClient(
       detectSessionInUrl: false
     },
     db: {
-      schema: 'public'
+      schema: 'refraim'
     }
   }
 );
