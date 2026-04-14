@@ -1794,128 +1794,129 @@ export default function FocusSelector() {
                             </div>
                           </div>
 
-                          {/* Expanded: QA issues + sliders together */}
-                          {isExpanded && (
+                          {/* Expanded: preview + sliders + next action */}
+                          {isExpanded && (() => {
+                            const nextFlaggedIdx = cropReviews
+                              ? cropReviews.findIndex((r, i) => i > idx && r.quality !== 'good')
+                              : -1;
+                            const prevFlaggedCount = cropReviews
+                              ? cropReviews.filter(r => r.quality !== 'good').length
+                              : 0;
+
+                            return (
                             <div className="px-3 pb-3 space-y-3 border-t border-border-subtle/50">
-                              {/* Live crop preview + QA feedback */}
-                              <div className="mt-2 flex gap-3 items-start">
-                                {/* Live crop canvas — updates as you drag sliders */}
-                                <div className={`shrink-0 border-2 ${
-                                  review
-                                    ? review.quality === 'good' ? 'border-green-500' : review.quality === 'bad' ? 'border-red-hot' : 'border-yellow-500'
-                                    : 'border-orange-accent'
-                                }`}>
-                                  <canvas
-                                    ref={el => {
-                                      if (el) {
-                                        liveCropCanvasRef.current = el;
-                                        requestAnimationFrame(() => renderLiveCrop(idx));
-                                      }
-                                    }}
-                                    className="w-[120px] h-auto"
-                                    style={{ display: 'block' }}
+                              {/* Hero: Live crop preview — big, centered, clearly labeled */}
+                              <div className="mt-3">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                                  <span className="text-[10px] font-bold text-white-muted uppercase tracking-wide">Live Preview — updates as you adjust</span>
+                                </div>
+                                <div className="flex justify-center">
+                                  <div className={`border-2 ${
+                                    review
+                                      ? review.quality === 'good' ? 'border-green-500' : review.quality === 'bad' ? 'border-red-hot' : 'border-yellow-500'
+                                      : 'border-orange-accent'
+                                  }`}>
+                                    <canvas
+                                      ref={el => {
+                                        if (el) {
+                                          liveCropCanvasRef.current = el;
+                                          requestAnimationFrame(() => renderLiveCrop(idx));
+                                        }
+                                      }}
+                                      className="w-[180px] h-auto"
+                                      style={{ display: 'block' }}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* QA feedback — compact, below preview */}
+                              {review && review.quality !== 'good' && review.issues.length > 0 && (
+                                <div className={`p-2 border ${review.quality === 'bad' ? 'border-red-hot/30 bg-red-hot/5' : 'border-yellow-500/30 bg-yellow-500/5'}`}>
+                                  {review.issues.map((issue, i) => (
+                                    <div key={i} className="text-[10px] text-white-dim flex items-start gap-1">
+                                      <span className={review.quality === 'bad' ? 'text-red-hot' : 'text-yellow-500'}>•</span>
+                                      <span>{issue}</span>
+                                    </div>
+                                  ))}
+                                  {review.suggestion && (
+                                    <div className="mt-1 text-[10px] text-green-500 font-medium">{review.suggestion}</div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Sliders — compact layout */}
+                              <div className="space-y-2">
+                                <div>
+                                  <div className="flex items-center justify-between">
+                                    <label className="text-[10px] text-white-dim">← Left / Right →</label>
+                                    <span className="text-[10px] text-orange-accent font-mono font-bold">{seg.offset_x > 0 ? '+' : ''}{seg.offset_x}</span>
+                                  </div>
+                                  <input
+                                    type="range" min={-50} max={50} step={1} value={seg.offset_x}
+                                    onChange={e => updateSegmentOffset(idx, 'offset_x', parseInt(e.target.value))}
+                                    className="w-full h-2 accent-orange-accent cursor-pointer"
                                   />
                                 </div>
-
-                                {/* QA feedback */}
-                                <div className="flex-1 min-w-0">
-                                  {review ? (
-                                    review.quality !== 'good' ? (
-                                      <div className={`p-2 border ${review.quality === 'bad' ? 'border-red-hot/30 bg-red-hot/5' : 'border-yellow-500/30 bg-yellow-500/5'}`}>
-                                        <div className="text-[10px] font-bold uppercase text-white-dim mb-1">Issues:</div>
-                                        {review.issues.map((issue, i) => (
-                                          <div key={i} className="text-[10px] text-white-dim flex items-start gap-1">
-                                            <span className={review.quality === 'bad' ? 'text-red-hot' : 'text-yellow-500'}>•</span>
-                                            <span>{issue}</span>
-                                          </div>
-                                        ))}
-                                        {review.suggestion && (
-                                          <div className="mt-1.5 text-[10px] text-green-500 font-medium">
-                                            {review.suggestion}
-                                          </div>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <div className="p-2 border border-green-500/30 bg-green-500/5">
-                                        <div className="text-[10px] text-green-500 flex items-center gap-1">
-                                          <ShieldCheck className="w-3 h-3" />
-                                          Looks good
-                                        </div>
-                                      </div>
-                                    )
-                                  ) : (
-                                    <div className="p-2 border border-border-subtle bg-black-deep">
-                                      <div className="text-[10px] text-white-dim italic">Run QA Review to check composition</div>
-                                    </div>
-                                  )}
+                                <div>
+                                  <div className="flex items-center justify-between">
+                                    <label className="text-[10px] text-white-dim">↑ Up / Down ↓</label>
+                                    <span className="text-[10px] text-orange-accent font-mono font-bold">{seg.offset_y > 0 ? '+' : ''}{seg.offset_y}</span>
+                                  </div>
+                                  <input
+                                    type="range" min={-50} max={50} step={1} value={seg.offset_y}
+                                    onChange={e => updateSegmentOffset(idx, 'offset_y', parseInt(e.target.value))}
+                                    className="w-full h-2 accent-orange-accent cursor-pointer"
+                                  />
                                 </div>
                               </div>
 
-                              {/* Offset sliders */}
-                              <div>
-                                <div className="text-[10px] font-bold uppercase text-white-dim mb-2">Adjust Crop Position</div>
-                                <div className="space-y-2">
-                                  <div>
-                                    <div className="flex items-center justify-between mb-1">
-                                      <label className="text-[10px] text-white-dim">
-                                        Horizontal
-                                        <span className="text-white-dim/50 ml-1">(← left / right →)</span>
-                                      </label>
-                                      <span className="text-[10px] text-orange-accent font-mono font-bold">{seg.offset_x > 0 ? '+' : ''}{seg.offset_x}</span>
-                                    </div>
-                                    <input
-                                      type="range"
-                                      min={-50}
-                                      max={50}
-                                      step={1}
-                                      value={seg.offset_x}
-                                      onChange={e => updateSegmentOffset(idx, 'offset_x', parseInt(e.target.value))}
-                                      className="w-full h-2 accent-orange-accent cursor-pointer"
-                                    />
-                                  </div>
-                                  <div>
-                                    <div className="flex items-center justify-between mb-1">
-                                      <label className="text-[10px] text-white-dim">
-                                        Vertical
-                                        <span className="text-white-dim/50 ml-1">(↑ up / down ↓)</span>
-                                      </label>
-                                      <span className="text-[10px] text-orange-accent font-mono font-bold">{seg.offset_y > 0 ? '+' : ''}{seg.offset_y}</span>
-                                    </div>
-                                    <input
-                                      type="range"
-                                      min={-50}
-                                      max={50}
-                                      step={1}
-                                      value={seg.offset_y}
-                                      onChange={e => updateSegmentOffset(idx, 'offset_y', parseInt(e.target.value))}
-                                      className="w-full h-2 accent-orange-accent cursor-pointer"
-                                    />
-                                  </div>
-                                </div>
-                                <div className="flex gap-1 mt-2">
+                              {/* Action bar: Reset, Auto-fix, Done/Next */}
+                              <div className="flex items-center gap-2 pt-1">
+                                <button
+                                  onClick={() => { updateSegmentOffset(idx, 'offset_x', 0); updateSegmentOffset(idx, 'offset_y', 0); }}
+                                  className="px-2 py-1 text-[10px] text-white-dim border border-border-subtle hover:border-orange-accent transition-colors"
+                                >
+                                  Reset
+                                </button>
+                                {hasProblem && (
                                   <button
-                                    onClick={() => { updateSegmentOffset(idx, 'offset_x', 0); updateSegmentOffset(idx, 'offset_y', 0); }}
-                                    className="px-2 py-1 text-[10px] text-white-dim border border-border-subtle hover:border-orange-accent transition-colors"
+                                    onClick={() => autoFixSegment(idx)}
+                                    className="px-2 py-1 text-[10px] font-bold text-black bg-yellow-500 hover:bg-yellow-400 transition-colors flex items-center gap-1"
                                   >
-                                    Reset to center
+                                    <Wrench className="w-3 h-3" />
+                                    Auto-fix
                                   </button>
-                                  {hasProblem && (
-                                    <button
-                                      onClick={() => autoFixSegment(idx)}
-                                      className="px-2 py-1 text-[10px] font-bold text-black bg-yellow-500 hover:bg-yellow-400 transition-colors flex items-center gap-1"
-                                    >
-                                      <Wrench className="w-3 h-3" />
-                                      Auto-fix this segment
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-
-                              <div className="text-[10px] text-white-dim/50 italic">
-                                Drag sliders to adjust — the live preview above updates in real time
+                                )}
+                                <div className="flex-1" />
+                                {nextFlaggedIdx >= 0 ? (
+                                  <button
+                                    onClick={() => { setExpandedSegIdx(nextFlaggedIdx); seekToFrame((aiStrategy.segments[nextFlaggedIdx].time_start + aiStrategy.segments[nextFlaggedIdx].time_end) / 2); }}
+                                    className="px-3 py-1.5 text-[10px] font-bold uppercase text-white bg-orange-accent hover:bg-red-hot transition-colors flex items-center gap-1"
+                                  >
+                                    Done — Next Issue →
+                                  </button>
+                                ) : prevFlaggedCount > 0 ? (
+                                  <button
+                                    onClick={() => { setExpandedSegIdx(null); }}
+                                    className="px-3 py-1.5 text-[10px] font-bold uppercase text-white bg-green-600 hover:bg-green-500 transition-colors flex items-center gap-1"
+                                  >
+                                    <ShieldCheck className="w-3 h-3" />
+                                    All Fixed — Done
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => setExpandedSegIdx(null)}
+                                    className="px-3 py-1.5 text-[10px] font-bold uppercase text-white-dim border border-border-subtle hover:border-orange-accent transition-colors"
+                                  >
+                                    Done
+                                  </button>
+                                )}
                               </div>
                             </div>
-                          )}
+                            );
+                          })()}
                         </div>
                       );
                     })}
