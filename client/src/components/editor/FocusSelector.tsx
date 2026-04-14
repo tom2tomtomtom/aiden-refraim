@@ -7,7 +7,7 @@ import type { Subject as ScannerSubject } from '../../services/VideoScannerServi
 import type { Subject, ScanOptions, ScanStatus } from '../../types/scan';
 import type { FocusPointCreate } from '../../types/focusPoint';
 import { segmentPositionsToFocusPoints } from '../../services/FocusInterpolationService';
-import { Sparkles, Play, Pause, PenTool, X, Star, ChevronDown, ChevronRight, BookOpen, ShieldCheck, AlertTriangle, XCircle } from 'lucide-react';
+import { Sparkles, Play, Pause, PenTool, X, Star, ChevronDown, ChevronRight, BookOpen, ShieldCheck, AlertTriangle, XCircle, Wrench, RefreshCw, SlidersHorizontal } from 'lucide-react';
 
 const PLATFORM_ASPECT_RATIOS: Record<string, [number, number]> = {
   'tiktok': [9, 16],
@@ -862,6 +862,137 @@ export default function FocusSelector() {
     }
   }, [api, videoId, aiStrategy, videoElementRef, targetPlatform, detectedSubjects]);
 
+  // Track which segment is expanded for manual offset editing
+  const [expandedSegIdx, setExpandedSegIdx] = useState<number | null>(null);
+
+  const updateSegmentOffset = useCallback((idx: number, axis: 'offset_x' | 'offset_y', value: number) => {
+    setAiStrategy(prev => {
+      if (!prev) return prev;
+      const updated = { ...prev, segments: [...prev.segments] };
+      updated.segments[idx] = { ...updated.segments[idx], [axis]: value };
+      return updated;
+    });
+    setCropReviews(null);
+  }, []);
+
+  const autoFixSegment = useCallback((idx: number) => {
+    if (!cropReviews || !cropReviews[idx] || !aiStrategy) return;
+    const review = cropReviews[idx];
+    const suggestion = review.suggestion.toLowerCase();
+    const seg = aiStrategy.segments[idx];
+
+    let dx = 0, dy = 0;
+    const nudge = 8;
+
+    if (suggestion.includes('right') || suggestion.includes('left edge')) dx = nudge;
+    else if (suggestion.includes('left') || suggestion.includes('right edge')) dx = -nudge;
+
+    if (suggestion.includes('down') || suggestion.includes('headroom') || suggestion.includes('top')) dy = nudge;
+    else if (suggestion.includes('up') || suggestion.includes('bottom')) dy = -nudge;
+
+    if (dx === 0 && dy === 0) {
+      if (review.issues.some(i => i.toLowerCase().includes('face') && i.toLowerCase().includes('cut'))) dy = -nudge;
+      else if (review.issues.some(i => i.toLowerCase().includes('tight') || i.toLowerCase().includes('headroom'))) dy = nudge;
+      else dx = nudge;
+    }
+
+    setAiStrategy(prev => {
+      if (!prev) return prev;
+      const updated = { ...prev, segments: [...prev.segments] };
+      updated.segments[idx] = {
+        ...updated.segments[idx],
+        offset_x: Math.max(-50, Math.min(50, seg.offset_x + dx)),
+        offset_y: Math.max(-50, Math.min(50, seg.offset_y + dy)),
+      };
+      return updated;
+    });
+
+    setCropReviews(prev => {
+      if (!prev) return prev;
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], quality: 'good', issues: ['Auto-fixed'], suggestion: '' };
+      return updated;
+    });
+  }, [cropReviews, aiStrategy]);
+
+  const regenFlaggedSegments = useCallback(async () => {
+    if (!api || !videoId || !aiStrategy || !cropReviews) return;
+
+    const flaggedIndices = cropReviews
+      .map((r, i) => r.quality !== 'good' ? i : -1)
+      .filter(i => i >= 0);
+
+    if (flaggedIndices.length === 0) return;
+
+    setAiLoading(true);
+    setError(null);
+
+    try {
+      const subjectInputs = detectedSubjects.map(s => {
+        const avgCoverage = s.positions.reduce((sum, p) => sum + (p.bbox[2] * p.bbox[3]) / 100, 0) / (s.positions.length || 1);
+        const avgConfidence = s.positions.reduce((sum, p) => sum + p.score, 0) / (s.positions.length || 1);
+        return {
+          id: s.id,
+          class: s.class,
+          first_seen: s.first_seen,
+          last_seen: s.last_seen,
+          position_count: s.positions.length,
+          avg_screen_coverage: avgCoverage,
+          avg_confidence: avgConfidence,
+        };
+      });
+
+      const qaFeedback = flaggedIndices.map(i => {
+        const seg = aiStrategy.segments[i];
+        const review = cropReviews[i];
+        return `Segment ${seg.time_start.toFixed(1)}s-${seg.time_end.toFixed(1)}s (${seg.follow_subject}): ${review.issues.join('; ')}. Suggestion: ${review.suggestion}`;
+      }).join('\n');
+
+      const augmentedBrief = [
+        storyBrief,
+        '\n\nCRITICAL QA FEEDBACK — these segments had composition issues and need different offsets:',
+        qaFeedback,
+        '\nPlease significantly adjust offset_x and offset_y for these segments to fix the problems.',
+      ].filter(Boolean).join('\n');
+
+      const visionFrames = keyFrames.length <= 6
+        ? keyFrames
+        : Array.from({ length: 6 }, (_, i) => keyFrames[Math.round(i * (keyFrames.length - 1) / 5)]);
+
+      const newStrategy = await api.getAIFocusStrategy(
+        videoId,
+        subjectInputs,
+        duration,
+        targetPlatform,
+        augmentedBrief,
+        annotations.length > 0 ? annotations : undefined,
+        visionFrames.length > 0 ? visionFrames : undefined,
+      );
+
+      // Merge: keep good segments, replace flagged ones
+      setAiStrategy(prev => {
+        if (!prev) return newStrategy;
+        const merged = { ...prev, segments: [...prev.segments] };
+        for (const flagIdx of flaggedIndices) {
+          const oldSeg = prev.segments[flagIdx];
+          const replacement = newStrategy.segments.find(
+            ns => Math.abs(ns.time_start - oldSeg.time_start) < 0.5
+          );
+          if (replacement) {
+            merged.segments[flagIdx] = replacement;
+          }
+        }
+        merged.reasoning = `${prev.reasoning} [Re-generated ${flaggedIndices.length} flagged segments]`;
+        return merged;
+      });
+      setCropReviews(null);
+    } catch (err) {
+      setError('Re-generation failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setAiLoading(false);
+    }
+  }, [api, videoId, aiStrategy, cropReviews, detectedSubjects, duration, targetPlatform, storyBrief, annotations, keyFrames]);
+
   const applyAIStrategy = useCallback(async () => {
     if (!aiStrategy) return;
 
@@ -1430,19 +1561,93 @@ export default function FocusSelector() {
 
                   <p className="text-xs text-white-muted">{aiStrategy.reasoning}</p>
 
-                  <div className="max-h-64 overflow-y-auto space-y-1">
-                    {aiStrategy.segments.map((seg, idx) => (
-                      <div key={idx} className="flex items-center gap-2 text-[10px] bg-black-card p-2 border border-border-subtle">
-                        <span className="text-white-dim font-mono shrink-0">
-                          {seg.time_start.toFixed(1)}s-{seg.time_end.toFixed(1)}s
-                        </span>
-                        <span className="text-orange-accent font-bold uppercase">{seg.follow_subject}</span>
-                        <span className="text-white-dim">{seg.composition}</span>
-                        <span className={`ml-auto px-1 ${seg.transition === 'hard_cut' ? 'text-red-hot' : 'text-green-500'}`}>
-                          {seg.transition === 'hard_cut' ? 'CUT' : 'PAN'}
-                        </span>
-                      </div>
-                    ))}
+                  <div className="max-h-80 overflow-y-auto space-y-1">
+                    {aiStrategy.segments.map((seg, idx) => {
+                      const review = cropReviews?.[idx];
+                      const isExpanded = expandedSegIdx === idx;
+                      const qualityBorder = review
+                        ? review.quality === 'good' ? 'border-green-500/30' : review.quality === 'bad' ? 'border-red-hot/30' : 'border-yellow-500/30'
+                        : 'border-border-subtle';
+                      return (
+                        <div key={idx} className={`bg-black-card border ${qualityBorder} transition-all`}>
+                          <div
+                            className="flex items-center gap-2 text-[10px] p-2 cursor-pointer hover:bg-black-deep/50"
+                            onClick={() => { setExpandedSegIdx(isExpanded ? null : idx); seekToFrame((seg.time_start + seg.time_end) / 2); }}
+                          >
+                            {review && (
+                              <div className={`w-2 h-2 rounded-full shrink-0 ${
+                                review.quality === 'good' ? 'bg-green-500' : review.quality === 'bad' ? 'bg-red-hot' : 'bg-yellow-500'
+                              }`} />
+                            )}
+                            <span className="text-white-dim font-mono shrink-0">
+                              {seg.time_start.toFixed(1)}s-{seg.time_end.toFixed(1)}s
+                            </span>
+                            <span className="text-orange-accent font-bold uppercase truncate">{seg.follow_subject}</span>
+                            <span className="text-white-dim truncate hidden sm:inline">{seg.composition}</span>
+                            <div className="ml-auto flex items-center gap-1 shrink-0">
+                              <span className="text-white-dim/50 font-mono">
+                                x:{seg.offset_x > 0 ? '+' : ''}{seg.offset_x} y:{seg.offset_y > 0 ? '+' : ''}{seg.offset_y}
+                              </span>
+                              <SlidersHorizontal className={`w-3 h-3 ${isExpanded ? 'text-orange-accent' : 'text-white-dim/30'}`} />
+                            </div>
+                          </div>
+
+                          {isExpanded && (
+                            <div className="px-2 pb-2 space-y-2 border-t border-border-subtle/50">
+                              <div className="pt-2">
+                                <div className="flex items-center justify-between mb-1">
+                                  <label className="text-[10px] text-white-dim uppercase tracking-wide">Offset X (horizontal)</label>
+                                  <span className="text-[10px] text-orange-accent font-mono">{seg.offset_x > 0 ? '+' : ''}{seg.offset_x}</span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min={-50}
+                                  max={50}
+                                  step={1}
+                                  value={seg.offset_x}
+                                  onChange={e => updateSegmentOffset(idx, 'offset_x', parseInt(e.target.value))}
+                                  className="w-full h-1.5 accent-orange-accent"
+                                />
+                              </div>
+                              <div>
+                                <div className="flex items-center justify-between mb-1">
+                                  <label className="text-[10px] text-white-dim uppercase tracking-wide">Offset Y (vertical)</label>
+                                  <span className="text-[10px] text-orange-accent font-mono">{seg.offset_y > 0 ? '+' : ''}{seg.offset_y}</span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min={-50}
+                                  max={50}
+                                  step={1}
+                                  value={seg.offset_y}
+                                  onChange={e => updateSegmentOffset(idx, 'offset_y', parseInt(e.target.value))}
+                                  className="w-full h-1.5 accent-orange-accent"
+                                />
+                              </div>
+                              <div className="flex gap-1">
+                                <button
+                                  onClick={() => updateSegmentOffset(idx, 'offset_x', 0)}
+                                  className="px-2 py-0.5 text-[9px] text-white-dim border border-border-subtle hover:border-orange-accent"
+                                  title="Reset X to 0"
+                                >
+                                  Reset X
+                                </button>
+                                <button
+                                  onClick={() => updateSegmentOffset(idx, 'offset_y', 0)}
+                                  className="px-2 py-0.5 text-[9px] text-white-dim border border-border-subtle hover:border-orange-accent"
+                                  title="Reset Y to 0"
+                                >
+                                  Reset Y
+                                </button>
+                              </div>
+                              {review && review.quality !== 'good' && (
+                                <div className="text-[10px] text-yellow-500/80 italic">{review.suggestion}</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
 
                   <div className="flex gap-2">
@@ -1493,10 +1698,12 @@ export default function FocusSelector() {
                         return (
                           <div
                             key={idx}
-                            className={`p-2 border ${qualityConfig.border} ${qualityConfig.bg} cursor-pointer hover:brightness-125 transition-all`}
-                            onClick={() => seekToFrame(review.time)}
+                            className={`p-2 border ${qualityConfig.border} ${qualityConfig.bg} transition-all`}
                           >
-                            <div className="flex items-center gap-2">
+                            <div
+                              className="flex items-center gap-2 cursor-pointer"
+                              onClick={() => seekToFrame(review.time)}
+                            >
                               <Icon className={`w-4 h-4 ${qualityConfig.color} shrink-0`} />
                               <span className="text-white-dim font-mono text-[10px] shrink-0">
                                 {review.time.toFixed(1)}s
@@ -1525,9 +1732,38 @@ export default function FocusSelector() {
                                 {review.suggestion}
                               </div>
                             )}
+                            {review.quality !== 'good' && (
+                              <div className="mt-1.5 ml-6 flex gap-1">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); autoFixSegment(idx); }}
+                                  className="px-2 py-0.5 text-[9px] font-bold uppercase text-white bg-yellow-600 border border-yellow-600 hover:bg-yellow-500 transition-colors flex items-center gap-1"
+                                >
+                                  <Wrench className="w-2.5 h-2.5" />
+                                  Fix It
+                                </button>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setExpandedSegIdx(idx); }}
+                                  className="px-2 py-0.5 text-[9px] font-bold uppercase text-white-dim border border-border-subtle hover:border-orange-accent transition-colors flex items-center gap-1"
+                                >
+                                  <SlidersHorizontal className="w-2.5 h-2.5" />
+                                  Manual
+                                </button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
+
+                      {cropReviews.some(r => r.quality !== 'good') && (
+                        <button
+                          onClick={regenFlaggedSegments}
+                          disabled={aiLoading}
+                          className="w-full mt-2 px-3 py-2 bg-black-card text-white text-xs font-bold uppercase tracking-wide border-2 border-yellow-500 hover:bg-yellow-500/10 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <RefreshCw className={`w-3 h-3 text-yellow-500 ${aiLoading ? 'animate-spin' : ''}`} />
+                          {aiLoading ? 'Re-generating...' : `Re-generate ${cropReviews.filter(r => r.quality !== 'good').length} Flagged Segments`}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
