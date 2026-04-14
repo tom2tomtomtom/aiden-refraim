@@ -26,6 +26,7 @@ interface AIStrategy {
     time_end: number;
     follow_subject: string;
     composition: string;
+    composition_mode: 'crop' | 'fit' | 'letterbox';
     offset_x: number;
     offset_y: number;
     transition: string;
@@ -134,18 +135,22 @@ function AIReframePreview({
     }
   }, [isPlaying]);
 
-  // Compute focus position from AI strategy at current time
-  const focusPosition = useMemo(() => {
+  // Compute focus position and composition mode from AI strategy at current time
+  const { focusPosition, activeMode } = useMemo(() => {
     const t = currentTime;
     const activeSeg = strategy.segments.find(
       s => t >= s.time_start && t < s.time_end
     ) || strategy.segments[strategy.segments.length - 1];
 
-    if (!activeSeg) return { x: 50, y: 50 };
+    if (!activeSeg) return { focusPosition: { x: 50, y: 50 }, activeMode: 'crop' as const };
 
+    const mode = activeSeg.composition_mode || 'crop';
     const subject = detectedSubjects.find(s => s.class === activeSeg.follow_subject);
     if (!subject || subject.positions.length === 0) {
-      return { x: 50 + (activeSeg.offset_x || 0), y: 50 + (activeSeg.offset_y || 0) };
+      return {
+        focusPosition: { x: 50 + (activeSeg.offset_x || 0), y: 50 + (activeSeg.offset_y || 0) },
+        activeMode: mode,
+      };
     }
 
     const positions = subject.positions.filter(
@@ -155,10 +160,17 @@ function AIReframePreview({
 
     const avgX = pool.reduce((s, p) => s + p.bbox[0] + p.bbox[2] / 2, 0) / pool.length;
     const avgY = pool.reduce((s, p) => s + p.bbox[1] + p.bbox[3] / 2, 0) / pool.length;
+    const avgH = pool.reduce((s, p) => s + p.bbox[3], 0) / pool.length;
+
+    const isPerson = subject.class === 'person';
+    const faceOffset = isPerson ? -(avgH * 0.2) : 0;
 
     return {
-      x: Math.max(0, Math.min(100, avgX + (activeSeg.offset_x || 0))),
-      y: Math.max(0, Math.min(100, avgY + (activeSeg.offset_y || 0))),
+      focusPosition: {
+        x: Math.max(0, Math.min(100, avgX + (activeSeg.offset_x || 0))),
+        y: Math.max(0, Math.min(100, avgY + (activeSeg.offset_y || 0) + faceOffset)),
+      },
+      activeMode: mode,
     };
   }, [currentTime, strategy, detectedSubjects]);
 
@@ -188,22 +200,54 @@ function AIReframePreview({
         {/* Reframed preview */}
         <div className="relative shrink-0">
           <div
-            className="overflow-hidden bg-black-ink border-2 border-orange-accent"
+            className="overflow-hidden bg-black-ink border-2 border-orange-accent relative"
             style={{ width: `${previewWidth}px`, height: `${previewHeight}px` }}
           >
-            <video
-              ref={previewRef}
-              src={videoUrl}
-              crossOrigin="anonymous"
-              className="w-full h-full"
-              style={{
-                objectFit: 'cover',
-                objectPosition: `${focusPosition.x}% ${focusPosition.y}%`,
-              }}
-              muted
-              playsInline
-              preload="auto"
-            />
+            {activeMode === 'fit' ? (
+              <>
+                {/* Blurred background layer */}
+                <video
+                  src={videoUrl}
+                  crossOrigin="anonymous"
+                  className="absolute inset-0 w-full h-full"
+                  style={{ objectFit: 'cover', filter: 'blur(20px) brightness(0.4)', transform: 'scale(1.2)' }}
+                  ref={el => {
+                    if (el && previewRef.current) {
+                      el.currentTime = previewRef.current.currentTime;
+                      if (!previewRef.current.paused) el.play().catch(() => {});
+                    }
+                  }}
+                  muted
+                  playsInline
+                  preload="auto"
+                />
+                {/* Sharp foreground layer */}
+                <video
+                  ref={previewRef}
+                  src={videoUrl}
+                  crossOrigin="anonymous"
+                  className="absolute inset-0 w-full h-full"
+                  style={{ objectFit: 'contain' }}
+                  muted
+                  playsInline
+                  preload="auto"
+                />
+              </>
+            ) : (
+              <video
+                ref={previewRef}
+                src={videoUrl}
+                crossOrigin="anonymous"
+                className="w-full h-full"
+                style={{
+                  objectFit: activeMode === 'letterbox' ? 'contain' : 'cover',
+                  objectPosition: `${focusPosition.x}% ${focusPosition.y}%`,
+                }}
+                muted
+                playsInline
+                preload="auto"
+              />
+            )}
           </div>
           <button
             onClick={togglePlay}
@@ -751,13 +795,13 @@ export default function FocusSelector() {
     setScanStatus('finalizing');
 
     const focusPointCreates: FocusPointCreate[] = aiStrategy.segments.map(seg => {
-      // Try to find matching detected subject
       const subject = detectedSubjects.find(s => s.class === seg.follow_subject);
       const positions = subject?.positions.filter(
         p => p.time >= seg.time_start && p.time <= seg.time_end
       ) || [];
 
       let baseX = 50, baseY = 50, width = 30, height = 30;
+      let isPerson = false;
 
       if (positions.length > 0) {
         const avgBbox = positions.reduce(
@@ -773,8 +817,8 @@ export default function FocusSelector() {
         baseY = avgBbox.y / positions.length;
         width = avgBbox.w / positions.length;
         height = avgBbox.h / positions.length;
+        isPerson = subject?.class === 'person';
       } else {
-        // Fall back to annotation bbox if follow_subject matches an annotation label
         const matchingAnnotation = annotations.find(
           a => a.label.toLowerCase().replace(/\s+/g, '_') === seg.follow_subject.toLowerCase().replace(/\s+/g, '_')
             || a.label.toLowerCase() === seg.follow_subject.toLowerCase()
@@ -787,17 +831,22 @@ export default function FocusSelector() {
         }
       }
 
+      // Face-weighted centering: shift person focus toward upper portion (face area)
+      const faceOffset = isPerson ? -(height * 0.2) : 0;
+
       const adjustedX = Math.max(0, Math.min(100 - width, baseX - width / 2 + seg.offset_x));
-      const adjustedY = Math.max(0, Math.min(100 - height, baseY - height / 2 + seg.offset_y));
+      const adjustedY = Math.max(0, Math.min(100 - height, baseY - height / 2 + seg.offset_y + faceOffset));
+
+      const mode = seg.composition_mode || 'crop';
 
       return {
         time_start: seg.time_start,
         time_end: seg.time_end,
         x: adjustedX,
-        y: adjustedY,
+        y: Math.max(0, adjustedY),
         width: Math.min(width, 100),
         height: Math.min(height, 100),
-        description: `${seg.follow_subject} (${seg.composition})`,
+        description: `${seg.follow_subject} (${seg.composition}) [${mode}]`,
         source: 'ai_detection' as const,
       };
     });
@@ -1318,6 +1367,11 @@ export default function FocusSelector() {
                         </span>
                         <span className="text-orange-accent font-bold uppercase">{seg.follow_subject}</span>
                         <span className="text-white-dim">{seg.composition}</span>
+                        {seg.composition_mode && seg.composition_mode !== 'crop' && (
+                          <span className="px-1 py-0.5 bg-blue-500/20 text-blue-400 font-bold uppercase">
+                            {seg.composition_mode}
+                          </span>
+                        )}
                         <span className={`ml-auto px-1 ${seg.transition === 'hard_cut' ? 'text-red-hot' : 'text-green-500'}`}>
                           {seg.transition === 'hard_cut' ? 'CUT' : 'PAN'}
                         </span>

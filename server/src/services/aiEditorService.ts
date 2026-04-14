@@ -33,6 +33,7 @@ export interface FocusSegment {
   time_end: number;
   follow_subject: string;
   composition: 'center' | 'rule_of_thirds_left' | 'rule_of_thirds_right' | 'top_center' | 'bottom_center';
+  composition_mode: 'crop' | 'fit' | 'letterbox';
   offset_x: number;
   offset_y: number;
   transition: 'smooth_pan' | 'hard_cut';
@@ -144,6 +145,9 @@ export async function generateFocusStrategy(
       }
       if (!['center', 'rule_of_thirds_left', 'rule_of_thirds_right', 'top_center', 'bottom_center'].includes(seg.composition)) {
         seg.composition = 'center';
+      }
+      if (!['crop', 'fit', 'letterbox'].includes(seg.composition_mode)) {
+        seg.composition_mode = 'crop';
       }
     }
 
@@ -274,15 +278,30 @@ ${sceneList}
 These describe what is actually happening in each shot. Use them to understand the editorial flow — scene changes, mood shifts, and narrative beats that object detection alone cannot capture.`);
   }
 
-  // LOWEST PRIORITY: Auto-detected subjects
+  // LOWEST PRIORITY: Auto-detected subjects with shot scale analysis
   const subjectList = subjects
-    .map(s => `- ${s.class}: visible ${s.first_seen.toFixed(1)}s-${s.last_seen.toFixed(1)}s, detected ${s.position_count} times, avg ${s.avg_screen_coverage.toFixed(1)}% screen coverage, confidence ${(s.avg_confidence * 100).toFixed(0)}%`)
+    .map(s => {
+      const scale = s.avg_screen_coverage > 50 ? 'EXTREME CLOSE-UP'
+        : s.avg_screen_coverage > 30 ? 'CLOSE-UP'
+        : s.avg_screen_coverage > 15 ? 'MEDIUM SHOT'
+        : 'WIDE SHOT';
+      return `- ${s.class}: visible ${s.first_seen.toFixed(1)}s-${s.last_seen.toFixed(1)}s, detected ${s.position_count} times, avg ${s.avg_screen_coverage.toFixed(1)}% screen coverage (${scale}), confidence ${(s.avg_confidence * 100).toFixed(0)}%`;
+    })
     .join('\n');
 
   sections.push(`DETECTED SUBJECTS (auto-detection — use as fallback):
 ${subjectList}
 
-These are COCO-SSD object detection labels. They may be wrong or misleading (e.g. "potted_plant" might be a window with rain). If user annotations or the story brief contradict these labels, trust the user.`);
+These are COCO-SSD object detection labels. They may be wrong or misleading (e.g. "potted_plant" might be a window with rain). If user annotations or the story brief contradict these labels, trust the user.
+
+SHOT SCALE AWARENESS:
+The screen coverage % tells you how tight the framing is. When converting 16:9 landscape to 9:16 vertical, you only keep ~32% of the horizontal frame. This means:
+- EXTREME CLOSE-UP (>50% coverage): The subject already fills the frame. Cropping to 9:16 will CHOP the subject. Use composition_mode "fit" to preserve the full frame with blurred background.
+- CLOSE-UP (30-50%): Tight framing. Cropping may clip edges of the subject. Prefer "fit" mode for faces/people, "crop" only if the subject is well-centered.
+- MEDIUM SHOT (15-30%): Standard framing. "crop" works well — there's enough margin to reframe.
+- WIDE SHOT (<15%): Plenty of reframing room. Always "crop".
+
+For faces and people in close-ups: "fit" mode preserves the intimacy without cutting off heads/chins.`);
 
   // Priority rules
   sections.push(`PRIORITY RULES:
@@ -298,8 +317,16 @@ CREATIVE DIRECTION:
 - Do NOT follow the same subject for every segment
 - Vary composition: center, rule_of_thirds_left, rule_of_thirds_right, top_center
 - Use offset_x and offset_y for precise framing (-50 to 50)
+- For person subjects: use negative offset_y (-10 to -20) to weight the focus toward the FACE, not body center
 - Segment durations: 2-4s for dynamic moments, 5-8s for establishing shots
 - If an annotated key moment exists at a timestamp, dedicate a segment to it
+
+COMPOSITION MODE (composition_mode):
+- "crop": Standard. Fill the target frame, cropping the excess. Best for medium/wide shots with room to reframe.
+- "fit": Scale the ENTIRE frame to fit inside the target ratio, with blurred background fill. Best for close-ups that would be ruined by cropping (faces being chopped, important detail lost at edges).
+- "letterbox": Scale to fit with clean black bars. Use sparingly for cinematic effect.
+
+RULE: If a person's screen coverage is >30% and the target is vertical (9:16), STRONGLY prefer "fit" mode. A chopped close-up looks amateur.
 
 Respond with ONLY valid JSON:
 {
@@ -309,8 +336,9 @@ Respond with ONLY valid JSON:
       "time_end": 5,
       "follow_subject": "person",
       "composition": "center",
+      "composition_mode": "crop",
       "offset_x": 0,
-      "offset_y": -5,
+      "offset_y": -10,
       "transition": "smooth_pan",
       "reason": "..."
     }
@@ -336,6 +364,7 @@ function generateRuleBasedStrategy(
         time_end: videoDuration,
         follow_subject: 'none',
         composition: 'center',
+        composition_mode: 'crop',
         offset_x: 0,
         offset_y: 0,
         transition: 'smooth_pan',
@@ -375,15 +404,19 @@ function generateRuleBasedStrategy(
     const switchedSubject = target.class !== lastSubjectClass && lastSubjectClass !== '';
     const compIndex = segments.length % compositions.length;
 
+    const isCloseUp = target.avg_screen_coverage > 30;
+    const needsFit = isVertical && isCloseUp;
+
     segments.push({
       time_start: t,
       time_end: segEnd,
       follow_subject: target.class,
       composition: activeSubjects.length > 1 ? compositions[compIndex] : (isVertical ? 'center' : compositions[compIndex]),
+      composition_mode: needsFit ? 'fit' : 'crop',
       offset_x: isVertical ? 0 : (compositions[compIndex] === 'rule_of_thirds_right' ? 15 : compositions[compIndex] === 'rule_of_thirds_left' ? -15 : 0),
-      offset_y: target.class === 'person' ? -5 : 0,
+      offset_y: target.class === 'person' ? -15 : 0,
       transition: t === 0 || switchedSubject ? 'hard_cut' : 'smooth_pan',
-      reason: `Following ${target.class}${activeSubjects.length > 1 ? ` (${activeSubjects.length} active)` : ''}${switchedSubject ? ' — subject switch' : ''}`,
+      reason: `Following ${target.class}${needsFit ? ' (close-up → fit mode)' : ''}${activeSubjects.length > 1 ? ` (${activeSubjects.length} active)` : ''}${switchedSubject ? ' — subject switch' : ''}`,
     });
 
     lastSubjectClass = target.class;
