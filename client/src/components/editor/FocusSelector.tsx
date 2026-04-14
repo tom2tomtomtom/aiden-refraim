@@ -977,6 +977,8 @@ export default function FocusSelector() {
   // Track which segment is expanded for manual offset editing
   const [expandedSegIdx, setExpandedSegIdx] = useState<number | null>(null);
 
+  const liveCropCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
   const updateSegmentOffset = useCallback((idx: number, axis: 'offset_x' | 'offset_y', value: number) => {
     setAiStrategy(prev => {
       if (!prev) return prev;
@@ -984,8 +986,77 @@ export default function FocusSelector() {
       updated.segments[idx] = { ...updated.segments[idx], [axis]: value };
       return updated;
     });
-    setCropReviews(null);
+    // Mark adjusted review as stale but keep the image
+    setCropReviews(prev => {
+      if (!prev || !prev[idx]) return prev;
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], quality: 'needs_adjustment', issues: ['Adjusted — re-run QA to verify'], suggestion: '' };
+      return updated;
+    });
   }, []);
+
+  // Re-render live crop whenever strategy changes or segment is expanded
+  useEffect(() => {
+    if (expandedSegIdx !== null && aiStrategy) {
+      requestAnimationFrame(() => renderLiveCrop(expandedSegIdx));
+    }
+  }, [expandedSegIdx, aiStrategy, targetPlatform]);
+
+  const renderLiveCrop = useCallback((idx: number) => {
+    const video = videoElementRef.current;
+    const canvas = liveCropCanvasRef.current;
+    if (!video || !canvas || !aiStrategy) return;
+
+    const seg = aiStrategy.segments[idx];
+    if (!seg) return;
+
+    const [ratioW, ratioH] = PLATFORM_ASPECT_RATIOS[targetPlatform] || [9, 16];
+    const cropWidth = 240;
+    const cropHeight = Math.round(cropWidth / (ratioW / ratioH));
+    canvas.width = cropWidth;
+    canvas.height = cropHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const subject = detectedSubjects.find(s => s.class === seg.follow_subject);
+    let focusX = 50 + (seg.offset_x || 0);
+    let focusY = 50 + (seg.offset_y || 0);
+
+    if (subject) {
+      const positions = subject.positions.filter(p => p.time >= seg.time_start && p.time <= seg.time_end);
+      const pool = positions.length > 0 ? positions : subject.positions;
+      if (pool.length > 0) {
+        focusX = pool.reduce((s, p) => s + p.bbox[0] + p.bbox[2] / 2, 0) / pool.length + (seg.offset_x || 0);
+        focusY = pool.reduce((s, p) => s + p.bbox[1] + p.bbox[3] / 2, 0) / pool.length + (seg.offset_y || 0);
+        const avgH = pool.reduce((s, p) => s + p.bbox[3], 0) / pool.length;
+        if (subject.class === 'person') focusY -= avgH * 0.2;
+      }
+    }
+
+    focusX = Math.max(0, Math.min(100, focusX));
+    focusY = Math.max(0, Math.min(100, focusY));
+
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const targetAspect = ratioW / ratioH;
+
+    let srcW: number, srcH: number;
+    if (targetAspect < vw / vh) {
+      srcH = vh;
+      srcW = vh * targetAspect;
+    } else {
+      srcW = vw;
+      srcH = vw / targetAspect;
+    }
+
+    const centerX = (focusX / 100) * vw;
+    const centerY = (focusY / 100) * vh;
+    const srcX = Math.max(0, Math.min(vw - srcW, centerX - srcW / 2));
+    const srcY = Math.max(0, Math.min(vh - srcH, centerY - srcH / 2));
+
+    ctx.clearRect(0, 0, cropWidth, cropHeight);
+    ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, cropWidth, cropHeight);
+  }, [videoElementRef, aiStrategy, targetPlatform, detectedSubjects]);
 
   const autoFixSegment = useCallback((idx: number) => {
     if (!cropReviews || !cropReviews[idx] || !aiStrategy) return;
@@ -1726,26 +1797,30 @@ export default function FocusSelector() {
                           {/* Expanded: QA issues + sliders together */}
                           {isExpanded && (
                             <div className="px-3 pb-3 space-y-3 border-t border-border-subtle/50">
-                              {/* Crop preview image + QA feedback side by side */}
-                              {review && (
-                                <div className="mt-2 flex gap-3 items-start">
-                                  {/* Cropped frame thumbnail */}
-                                  {review.cropImage && (
-                                    <div className={`shrink-0 border-2 ${
-                                      review.quality === 'good' ? 'border-green-500' : review.quality === 'bad' ? 'border-red-hot' : 'border-yellow-500'
-                                    }`}>
-                                      <img
-                                        src={review.cropImage}
-                                        alt={`Crop at ${review.time.toFixed(1)}s`}
-                                        className="w-[100px] h-auto"
-                                        draggable={false}
-                                      />
-                                    </div>
-                                  )}
+                              {/* Live crop preview + QA feedback */}
+                              <div className="mt-2 flex gap-3 items-start">
+                                {/* Live crop canvas — updates as you drag sliders */}
+                                <div className={`shrink-0 border-2 ${
+                                  review
+                                    ? review.quality === 'good' ? 'border-green-500' : review.quality === 'bad' ? 'border-red-hot' : 'border-yellow-500'
+                                    : 'border-orange-accent'
+                                }`}>
+                                  <canvas
+                                    ref={el => {
+                                      if (el) {
+                                        liveCropCanvasRef.current = el;
+                                        requestAnimationFrame(() => renderLiveCrop(idx));
+                                      }
+                                    }}
+                                    className="w-[120px] h-auto"
+                                    style={{ display: 'block' }}
+                                  />
+                                </div>
 
-                                  {/* Issues or pass message */}
-                                  <div className="flex-1 min-w-0">
-                                    {review.quality !== 'good' ? (
+                                {/* QA feedback */}
+                                <div className="flex-1 min-w-0">
+                                  {review ? (
+                                    review.quality !== 'good' ? (
                                       <div className={`p-2 border ${review.quality === 'bad' ? 'border-red-hot/30 bg-red-hot/5' : 'border-yellow-500/30 bg-yellow-500/5'}`}>
                                         <div className="text-[10px] font-bold uppercase text-white-dim mb-1">Issues:</div>
                                         {review.issues.map((issue, i) => (
@@ -1764,19 +1839,17 @@ export default function FocusSelector() {
                                       <div className="p-2 border border-green-500/30 bg-green-500/5">
                                         <div className="text-[10px] text-green-500 flex items-center gap-1">
                                           <ShieldCheck className="w-3 h-3" />
-                                          Looks good — well composed
+                                          Looks good
                                         </div>
                                       </div>
-                                    )}
-                                  </div>
+                                    )
+                                  ) : (
+                                    <div className="p-2 border border-border-subtle bg-black-deep">
+                                      <div className="text-[10px] text-white-dim italic">Run QA Review to check composition</div>
+                                    </div>
+                                  )}
                                 </div>
-                              )}
-
-                              {!review && (
-                                <div className="mt-2 p-2 border border-border-subtle bg-black-deep">
-                                  <div className="text-[10px] text-white-dim italic">Run QA Review to check this crop's composition</div>
-                                </div>
-                              )}
+                              </div>
 
                               {/* Offset sliders */}
                               <div>
