@@ -7,7 +7,7 @@ import type { Subject as ScannerSubject } from '../../services/VideoScannerServi
 import type { Subject, ScanOptions, ScanStatus } from '../../types/scan';
 import type { FocusPointCreate } from '../../types/focusPoint';
 import { segmentPositionsToFocusPoints } from '../../services/FocusInterpolationService';
-import { Sparkles, Play, Pause, PenTool, X, Star, ChevronDown, ChevronRight, BookOpen, ShieldCheck, AlertTriangle, XCircle, Wrench, RefreshCw, SlidersHorizontal } from 'lucide-react';
+import { Sparkles, Play, Pause, PenTool, X, Star, ChevronDown, ChevronRight, BookOpen, ShieldCheck, AlertTriangle, XCircle, Wrench, RefreshCw, SlidersHorizontal, Move, Maximize2, Type } from 'lucide-react';
 
 const PLATFORM_ASPECT_RATIOS: Record<string, [number, number]> = {
   'tiktok': [9, 16],
@@ -710,6 +710,114 @@ export default function FocusSelector() {
     setAnnotations(prev => prev.filter(a => a.id !== id));
   }, []);
 
+  // ---- Subject editing controls ----
+  const [editingSubjectId, setEditingSubjectId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState('');
+  const [draggingSubject, setDraggingSubject] = useState<{
+    subjectId: string;
+    mode: 'move' | 'resize';
+    startMouseX: number;
+    startMouseY: number;
+    startBboxX: number;
+    startBboxY: number;
+    startBboxW: number;
+    startBboxH: number;
+    containerWidth: number;
+    containerHeight: number;
+  } | null>(null);
+
+  const renameSubject = useCallback((id: string, newName: string) => {
+    if (!newName.trim()) return;
+    setDetectedSubjects(prev => prev.map(s =>
+      s.id === id ? { ...s, class: newName.trim().toLowerCase().replace(/\s+/g, '_') } : s
+    ));
+    setEditingSubjectId(null);
+  }, []);
+
+  const updateSubjectBbox = useCallback((id: string, bboxUpdate: Partial<{ x: number; y: number; w: number; h: number }>) => {
+    setDetectedSubjects(prev => prev.map(s => {
+      if (s.id !== id || s.positions.length === 0) return s;
+      const refPos = s.positions[0];
+      const [ox, oy, ow, oh] = refPos.bbox;
+      const dx = (bboxUpdate.x ?? ox) - ox;
+      const dy = (bboxUpdate.y ?? oy) - oy;
+      const sw = bboxUpdate.w !== undefined ? bboxUpdate.w / ow : 1;
+      const sh = bboxUpdate.h !== undefined ? bboxUpdate.h / oh : 1;
+
+      return {
+        ...s,
+        positions: s.positions.map(p => ({
+          ...p,
+          bbox: [
+            Math.max(0, Math.min(100, p.bbox[0] + dx)),
+            Math.max(0, Math.min(100, p.bbox[1] + dy)),
+            Math.max(2, Math.min(100, p.bbox[2] * sw)),
+            Math.max(2, Math.min(100, p.bbox[3] * sh)),
+          ] as [number, number, number, number],
+        })),
+      };
+    }));
+  }, []);
+
+  const handleSubjectDragStart = useCallback((
+    e: React.MouseEvent,
+    subjectId: string,
+    mode: 'move' | 'resize',
+    containerEl: HTMLDivElement,
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const subject = detectedSubjects.find(s => s.id === subjectId);
+    if (!subject || subject.positions.length === 0) return;
+    const rect = containerEl.getBoundingClientRect();
+    const pos = subject.positions[0];
+    setDraggingSubject({
+      subjectId,
+      mode,
+      startMouseX: e.clientX,
+      startMouseY: e.clientY,
+      startBboxX: pos.bbox[0],
+      startBboxY: pos.bbox[1],
+      startBboxW: pos.bbox[2],
+      startBboxH: pos.bbox[3],
+      containerWidth: rect.width,
+      containerHeight: rect.height,
+    });
+  }, [detectedSubjects]);
+
+  useEffect(() => {
+    if (!draggingSubject) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const d = draggingSubject;
+      const dxPx = e.clientX - d.startMouseX;
+      const dyPx = e.clientY - d.startMouseY;
+      const dxPct = (dxPx / d.containerWidth) * 100;
+      const dyPct = (dyPx / d.containerHeight) * 100;
+
+      if (d.mode === 'move') {
+        updateSubjectBbox(d.subjectId, {
+          x: Math.max(0, Math.min(100 - d.startBboxW, d.startBboxX + dxPct)),
+          y: Math.max(0, Math.min(100 - d.startBboxH, d.startBboxY + dyPct)),
+        });
+      } else {
+        updateSubjectBbox(d.subjectId, {
+          w: Math.max(5, d.startBboxW + dxPct),
+          h: Math.max(5, d.startBboxH + dyPct),
+        });
+      }
+    };
+
+    const handleMouseUp = () => setDraggingSubject(null);
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [draggingSubject, updateSubjectBbox]);
+
   const requestAISuggestion = useCallback(async () => {
     if (!api || !videoId || detectedSubjects.length === 0) return;
 
@@ -1276,25 +1384,11 @@ export default function FocusSelector() {
 
           <div className="flex gap-2 mb-4 flex-wrap">
             <button
-              onClick={acceptAll}
-              disabled={detectedSubjects.length === 0}
-              className="px-3 py-1.5 bg-orange-accent text-white text-xs font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Accept All
-            </button>
-            <button
-              onClick={rejectAll}
-              disabled={detectedSubjects.length === 0}
-              className="px-3 py-1.5 bg-red-hot text-white text-xs font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Reject All
-            </button>
-            <button
               onClick={finalize}
               disabled={scanStatus === 'finalizing' || acceptedIds.size === 0}
-              className="px-3 py-1.5 bg-red-hot text-white text-xs font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-4 py-1.5 bg-orange-accent text-white text-xs font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {scanStatus === 'finalizing' ? 'Finalizing...' : `Finalize (${acceptedIds.size})`}
+              {scanStatus === 'finalizing' ? 'Finalizing...' : `Use ${acceptedIds.size} Subjects`}
             </button>
             <button
               onClick={cancelReview}
@@ -1302,6 +1396,9 @@ export default function FocusSelector() {
             >
               Cancel
             </button>
+            <span className="text-[10px] text-white-dim self-center ml-auto">
+              Click name to rename • drag box to reposition • drag corner to resize
+            </span>
           </div>
 
           {/* Story Brief */}
@@ -1769,56 +1866,111 @@ export default function FocusSelector() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {detectedSubjects.map(subject => {
-              const isAccepted = acceptedIds.has(subject.id);
               const isRejected = rejectedIds.has(subject.id);
-              let borderClass = 'border-2 border-border-subtle bg-black-card';
-              if (isAccepted) borderClass = 'border-2 border-orange-accent bg-black-deep';
-              if (isRejected) borderClass = 'border-2 border-red-hot bg-black-card';
+              const isEditing = editingSubjectId === subject.id;
+              const refPos = subject.positions[0];
 
               return (
-                <div key={subject.id} className={`${borderClass} overflow-hidden p-3`}>
-                  <div className="flex justify-between items-start mb-2">
-                    <h4 className="font-bold text-white-muted capitalize text-sm">{subject.class}</h4>
-                    <span className="text-xs bg-black-deep text-orange-accent border border-orange-accent px-2 py-0.5">
-                      {subject.positions.length} frames
+                <div
+                  key={subject.id}
+                  className={`overflow-hidden p-3 transition-all ${
+                    isRejected
+                      ? 'border-2 border-red-hot/30 bg-black-card opacity-40'
+                      : 'border-2 border-orange-accent bg-black-deep'
+                  }`}
+                >
+                  {/* Name — editable */}
+                  <div className="flex items-center gap-2 mb-2">
+                    {isEditing ? (
+                      <input
+                        type="text"
+                        value={editingName}
+                        onChange={e => setEditingName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') renameSubject(subject.id, editingName); if (e.key === 'Escape') setEditingSubjectId(null); }}
+                        onBlur={() => renameSubject(subject.id, editingName)}
+                        className="flex-1 bg-black-card border border-orange-accent text-white-full text-sm px-2 py-0.5 font-bold"
+                        autoFocus
+                      />
+                    ) : (
+                      <button
+                        onClick={() => { setEditingSubjectId(subject.id); setEditingName(subject.class); }}
+                        className="flex items-center gap-1.5 text-left group"
+                        title="Click to rename"
+                      >
+                        <h4 className="font-bold text-white-muted capitalize text-sm group-hover:text-orange-accent transition-colors">{subject.class}</h4>
+                        <Type className="w-3 h-3 text-white-dim/30 group-hover:text-orange-accent transition-colors" />
+                      </button>
+                    )}
+                    <span className="ml-auto text-[10px] bg-black-deep text-orange-accent border border-orange-accent px-1.5 py-0.5 shrink-0">
+                      {subject.positions.length}f
                     </span>
                   </div>
-                  <div className="text-xs text-white-dim mb-2">
-                    <div>Time: {formatTime(subject.first_seen)} - {formatTime(subject.last_seen)}</div>
-                    <div>Duration: {formatTime(subject.last_seen - subject.first_seen)}</div>
+
+                  <div className="text-[10px] text-white-dim mb-2">
+                    {formatTime(subject.first_seen)} — {formatTime(subject.last_seen)} ({formatTime(subject.last_seen - subject.first_seen)})
                   </div>
-                  {/* Thumbnail */}
+
+                  {/* Thumbnail with draggable bbox overlay */}
                   {thumbnails.has(subject.id) ? (
-                    <div className="mb-2 border border-border-subtle overflow-hidden">
-                      <img src={thumbnails.get(subject.id)} alt={subject.class} className="w-full" />
+                    <div
+                      className="mb-2 border border-border-subtle overflow-hidden relative select-none"
+                      ref={el => {
+                        if (el) el.dataset.subjectId = subject.id;
+                      }}
+                    >
+                      <img
+                        src={thumbnails.get(subject.id)}
+                        alt={subject.class}
+                        className="w-full pointer-events-none"
+                        draggable={false}
+                      />
+                      {/* Bbox overlay — draggable to move */}
+                      {refPos && (
+                        <div
+                          className="absolute border-2 border-orange-accent bg-orange-accent/10 cursor-move group"
+                          style={{
+                            left: `${refPos.bbox[0]}%`,
+                            top: `${refPos.bbox[1]}%`,
+                            width: `${refPos.bbox[2]}%`,
+                            height: `${refPos.bbox[3]}%`,
+                          }}
+                          onMouseDown={e => {
+                            const container = (e.currentTarget.parentElement as HTMLDivElement);
+                            handleSubjectDragStart(e, subject.id, 'move', container);
+                          }}
+                        >
+                          <Move className="absolute top-0.5 left-0.5 w-3 h-3 text-orange-accent opacity-60 group-hover:opacity-100" />
+                          {/* Resize handle — bottom-right corner */}
+                          <div
+                            className="absolute -bottom-1 -right-1 w-3 h-3 bg-orange-accent cursor-se-resize"
+                            onMouseDown={e => {
+                              e.stopPropagation();
+                              const container = (e.currentTarget.parentElement!.parentElement as HTMLDivElement);
+                              handleSubjectDragStart(e, subject.id, 'resize', container);
+                            }}
+                          >
+                            <Maximize2 className="w-2.5 h-2.5 text-black m-px" />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="mb-2 h-16 bg-black-deep border border-border-subtle flex items-center justify-center">
                       <span className="text-xs text-white-dim">No preview</span>
                     </div>
                   )}
-                  <div className="flex justify-between gap-2">
-                    <button
-                      onClick={() => rejectSubject(subject.id)}
-                      className={`flex-1 px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition-all ${
-                        isRejected
-                          ? 'bg-red-hot text-white border-2 border-red-hot'
-                          : 'border-2 border-red-hot text-red-hot hover:bg-red-hot hover:text-white'
-                      }`}
-                    >
-                      Reject
-                    </button>
-                    <button
-                      onClick={() => acceptSubject(subject.id)}
-                      className={`flex-1 px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition-all ${
-                        isAccepted
-                          ? 'bg-orange-accent text-white border-2 border-orange-accent'
-                          : 'border-2 border-orange-accent text-orange-accent hover:bg-orange-accent hover:text-white'
-                      }`}
-                    >
-                      Accept
-                    </button>
-                  </div>
+
+                  {/* Keep / Remove toggle */}
+                  <button
+                    onClick={() => isRejected ? acceptSubject(subject.id) : rejectSubject(subject.id)}
+                    className={`w-full px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide transition-all ${
+                      isRejected
+                        ? 'border border-border-subtle text-white-dim hover:border-orange-accent hover:text-orange-accent'
+                        : 'border border-red-hot/30 text-red-hot/60 hover:bg-red-hot hover:text-white hover:border-red-hot'
+                    }`}
+                  >
+                    {isRejected ? 'Restore' : 'Remove'}
+                  </button>
                 </div>
               );
             })}
