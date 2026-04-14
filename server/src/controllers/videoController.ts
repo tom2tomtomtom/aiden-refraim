@@ -193,15 +193,16 @@ export const processVideo = async (req: Request, res: Response) => {
       user_id: user.id
     });
 
-    // Deduct tokens after successfully initiating the job
-    if (process.env.AIDEN_SERVICE_KEY) {
-      deductTokens(user.id, 'refraim', 'video_export').catch((err: Error) =>
-        console.error('[gateway-tokens] Deduct error:', err)
-      );
-    }
-
-    // Start processing asynchronously
-    processVideoForPlatforms(video, platforms).catch(console.error);
+    // Start processing asynchronously; deduct tokens only on success
+    processVideoForPlatforms(video, platforms)
+      .then(() => {
+        if (process.env.AIDEN_SERVICE_KEY) {
+          deductTokens(user.id, 'refraim', 'video_export').catch((err: Error) =>
+            console.error('[gateway-tokens] Deduct error:', err)
+          );
+        }
+      })
+      .catch(console.error);
 
     res.json(processingJob);
   } catch (error) {
