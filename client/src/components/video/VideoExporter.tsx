@@ -120,9 +120,9 @@ export default function VideoExporter() {
                   checked={selectedPlatforms.includes(key)}
                   onChange={() => togglePlatform(key)}
                   disabled={isExporting}
-                  className="h-4 w-4 accent-red-hot"
+                  className="h-4 w-4 accent-red-hot cursor-pointer"
                 />
-                <label htmlFor={`platform-${key}`} className="ml-2 text-sm text-white-muted flex-1">
+                <label htmlFor={`platform-${key}`} className="ml-2 text-sm text-white-muted flex-1 cursor-pointer">
                   {format.name} <span className="text-white-dim">({format.aspectRatio})</span>
                 </label>
 
@@ -204,6 +204,17 @@ export default function VideoExporter() {
         <p className="text-xs text-white-dim mb-4">
           Using {focusPoints.length} focus point{focusPoints.length !== 1 ? 's' : ''} for dynamic cropping
         </p>
+      )}
+
+      {/* Export status summary */}
+      {!isExporting && Object.keys(exportProgress).length > 0 && (
+        <div className="mb-4 p-3 bg-black-deep border border-border-subtle">
+          {Object.values(exportProgress).every(p => p.status === 'complete') ? (
+            <p className="text-xs text-green-500 font-bold uppercase">All exports complete. Use the download links above.</p>
+          ) : Object.values(exportProgress).some(p => p.status === 'error') ? (
+            <p className="text-xs text-red-hot font-bold uppercase">Some exports failed. Check individual status above.</p>
+          ) : null}
+        </div>
       )}
 
       {/* Export button */}

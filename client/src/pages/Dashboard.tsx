@@ -80,8 +80,6 @@ export function Dashboard() {
   };
 
   const handleDeleteVideo = async (video: Video) => {
-    if (!confirm('Are you sure you want to delete this video?')) return;
-
     try {
       if (!api) return;
       await api.deleteVideo(video.id);

@@ -119,6 +119,23 @@ function App() {
                     </PrivateRoute>
                   }
                 />
+                <Route
+                  path="*"
+                  element={
+                    <div className="min-h-screen bg-black-deep flex items-center justify-center">
+                      <div className="bg-black-card border-2 border-red-hot p-8 max-w-md text-center">
+                        <h1 className="text-red-hot text-6xl font-bold mb-4">404</h1>
+                        <p className="text-white-muted text-sm uppercase tracking-wide mb-6">Page not found</p>
+                        <a
+                          href="/"
+                          className="inline-block bg-red-hot text-white px-6 py-3 text-sm font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all"
+                        >
+                          Back to Dashboard
+                        </a>
+                      </div>
+                    </div>
+                  }
+                />
               </Routes>
             </div>
             </React.Suspense>

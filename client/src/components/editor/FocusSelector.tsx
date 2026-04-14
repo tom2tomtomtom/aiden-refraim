@@ -548,22 +548,24 @@ export default function FocusSelector() {
           <div className="flex gap-2 mb-4 flex-wrap">
             <button
               onClick={acceptAll}
-              className="px-3 py-1.5 bg-orange-accent text-white text-xs font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all"
+              disabled={detectedSubjects.length === 0}
+              className="px-3 py-1.5 bg-orange-accent text-white text-xs font-bold uppercase tracking-wide border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Accept All
             </button>
             <button
               onClick={rejectAll}
-              className="px-3 py-1.5 bg-red-hot text-white text-xs font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all"
+              disabled={detectedSubjects.length === 0}
+              className="px-3 py-1.5 bg-red-hot text-white text-xs font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Reject All
             </button>
             <button
               onClick={finalize}
-              disabled={scanStatus === 'finalizing'}
-              className="px-3 py-1.5 bg-red-hot text-white text-xs font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all disabled:opacity-50"
+              disabled={scanStatus === 'finalizing' || acceptedIds.size === 0}
+              className="px-3 py-1.5 bg-red-hot text-white text-xs font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {scanStatus === 'finalizing' ? 'Finalizing...' : 'Finalize'}
+              {scanStatus === 'finalizing' ? 'Finalizing...' : `Finalize (${acceptedIds.size})`}
             </button>
             <button
               onClick={cancelReview}

@@ -1,7 +1,19 @@
 import { useEffect, useState, useRef } from 'react';
 import { Video } from '../api';
 import { useApi } from '../contexts/ApiContext';
-import { Trash2, Play, Settings } from 'lucide-react';
+import { Trash2, Play, Settings, AlertTriangle } from 'lucide-react';
+
+function formatVideoName(url: string): string {
+  const filename = url.split('/').pop() || 'Untitled Video';
+  // Strip UUIDs and timestamps from filenames like "abc123-def456_1234567890_video.mp4"
+  const cleaned = filename
+    .replace(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}[_-]?/gi, '')
+    .replace(/^\d{10,}_?/, '')
+    .replace(/\.[^.]+$/, '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  return cleaned || 'Untitled Video';
+}
 
 interface VideoListProps {
   onVideoSelect: (video: Video) => void;
@@ -15,6 +27,7 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Video | null>(null);
 
   const loadVideos = async () => {
     if (!api) {
@@ -115,7 +128,48 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
     );
   }
 
+  const confirmDelete = (video: Video) => {
+    setDeleteTarget(video);
+  };
+
+  const handleConfirmDelete = () => {
+    if (deleteTarget) {
+      onDeleteVideo(deleteTarget);
+      setDeleteTarget(null);
+    }
+  };
+
   return (
+    <>
+    {/* Delete confirmation dialog */}
+    {deleteTarget && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+        <div className="bg-black-card border-2 border-red-hot p-6 max-w-sm w-full mx-4">
+          <div className="flex items-center gap-3 mb-4">
+            <AlertTriangle className="w-6 h-6 text-red-hot shrink-0" />
+            <h3 className="text-white-full font-bold uppercase text-sm">Delete Video</h3>
+          </div>
+          <p className="text-white-muted text-sm mb-6">
+            Are you sure you want to delete "{deleteTarget.title || formatVideoName(deleteTarget.original_url)}"? This action cannot be undone.
+          </p>
+          <div className="flex gap-3 justify-end">
+            <button
+              onClick={() => setDeleteTarget(null)}
+              className="px-4 py-2 bg-black-card text-white-muted text-xs font-bold uppercase tracking-wide border border-border-subtle hover:border-white-dim transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleConfirmDelete}
+              className="px-4 py-2 bg-red-hot text-white text-xs font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
     <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
       {videos.map((video) => (
         <div
@@ -128,6 +182,7 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
           >
             <video
               src={video.platform_outputs?.youtube?.url || video.original_url}
+              crossOrigin="anonymous"
               className="w-full h-full object-cover pointer-events-none"
               preload="metadata"
             />
@@ -138,7 +193,7 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
 
           <div className="p-4">
             <h3 className="font-bold text-white uppercase tracking-wide truncate">
-              {video.original_url.split('/').pop() || 'Untitled Video'}
+              {video.title || formatVideoName(video.original_url)}
             </h3>
             <p className="text-sm text-white-dim mt-1">
               {new Date(video.created_at).toLocaleDateString()}
@@ -173,7 +228,7 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
                   <Settings className="w-5 h-5" />
                 </button>
                 <button
-                  onClick={() => onDeleteVideo(video)}
+                  onClick={() => confirmDelete(video)}
                   className="p-2 text-white-muted hover:text-red-hot hover:bg-black-deep"
                   title="Delete Video"
                 >
@@ -185,5 +240,6 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
         </div>
       ))}
     </div>
+    </>
   );
 }

@@ -12,6 +12,7 @@ export function Login() {
   const [loading, setLoading] = useState(false);
   const [resetSent, setResetSent] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
+  const [signUpSuccess, setSignUpSuccess] = useState(false);
 
   if (user) {
     return <Navigate to="/" replace />;
@@ -43,6 +44,9 @@ export function Login() {
     try {
       if (isSignUp) {
         await signUp(email, password);
+        setSignUpSuccess(true);
+        setLoading(false);
+        return;
       } else {
         await signIn(email, password);
       }
@@ -72,6 +76,13 @@ export function Login() {
             <div className="p-3 bg-black-deep border-2 border-red-hot">
               <p className="text-xs text-red-hot font-bold uppercase">Error</p>
               <p className="text-sm text-white-muted mt-1">{error}</p>
+            </div>
+          )}
+
+          {signUpSuccess && (
+            <div className="p-3 bg-black-deep border-2 border-orange-accent">
+              <p className="text-xs text-orange-accent font-bold uppercase">Account Created</p>
+              <p className="text-sm text-white-muted mt-1">Check your email for a confirmation link to activate your account.</p>
             </div>
           )}
 
@@ -145,7 +156,7 @@ export function Login() {
           <div className="text-center">
             <button
               type="button"
-              onClick={() => setIsSignUp(!isSignUp)}
+              onClick={() => { setIsSignUp(!isSignUp); setError(null); setResetSent(false); setSignUpSuccess(false); }}
               className="text-xs text-white-dim uppercase tracking-wide hover:text-orange-accent transition-colors"
             >
               {isSignUp

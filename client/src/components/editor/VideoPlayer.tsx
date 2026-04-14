@@ -108,6 +108,7 @@ export default function VideoPlayer() {
       <video
         ref={videoRefCallback}
         src={videoUrl}
+        crossOrigin="anonymous"
         className="w-full aspect-video bg-black-ink"
         onTimeUpdate={handleTimeUpdate}
         onDurationChange={handleDurationChange}
