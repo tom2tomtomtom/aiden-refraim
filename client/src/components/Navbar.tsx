@@ -4,17 +4,13 @@ import { useAuth } from '../contexts/AuthContext';
 import { Menu, X, LogOut } from 'lucide-react';
 
 export function Navbar() {
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
-  const handleLogout = async () => {
-    try {
-      await signOut();
-    } catch {
-      // signOut handles redirect
-    }
+  const handleLogout = () => {
+    window.location.href = 'https://www.aiden.services/auth/logout';
   };
 
   const pathParts = location.pathname.split('/');
@@ -74,6 +70,12 @@ export function Navbar() {
 
         {user && (
           <div className="hidden md:flex items-center gap-4">
+            <a
+              href="https://www.aiden.services/dashboard"
+              className="text-xs font-bold uppercase tracking-wide text-white-dim hover:text-orange-accent transition-colors"
+            >
+              &larr; Hub
+            </a>
             <span className="text-white-dim text-xs truncate max-w-[200px]">{user.email}</span>
             <button
               onClick={() => setShowLogoutConfirm(true)}
@@ -101,6 +103,12 @@ export function Navbar() {
           </div>
           {user && (
             <div className="flex items-center justify-between pt-3 border-t border-border-subtle">
+              <a
+                href="https://www.aiden.services/dashboard"
+                className="text-xs font-bold uppercase tracking-wide text-white-dim hover:text-orange-accent transition-colors"
+              >
+                &larr; Hub
+              </a>
               <span className="text-white-dim text-xs truncate">{user.email}</span>
               <button
                 onClick={() => { setShowLogoutConfirm(true); setMobileOpen(false); }}
