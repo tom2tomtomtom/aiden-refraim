@@ -633,7 +633,8 @@ export default function FocusSelector() {
   // ---- Annotation controls ----
   const seekToFrame = useCallback((time: number) => {
     const video = videoElementRef.current;
-    if (video) video.currentTime = time;
+    if (!video) return;
+    video.currentTime = time;
   }, [videoElementRef]);
 
   const getAnnotationRelPos = useCallback((clientX: number, clientY: number) => {
@@ -1081,23 +1082,29 @@ export default function FocusSelector() {
     ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, cropWidth, cropHeight);
   }, [videoElementRef, aiStrategy, targetPlatform, detectedSubjects]);
 
-  // Scrub timeline: sync scrubTime with video timeupdate
+  // Scrub timeline: sync scrubTime with video timeupdate + seeked
   useEffect(() => {
     const video = videoElementRef.current;
     if (!video) return;
     const onTimeUpdate = () => setScrubTime(video.currentTime);
+    const onSeeked = () => setScrubTime(video.currentTime);
     video.addEventListener('timeupdate', onTimeUpdate);
-    return () => video.removeEventListener('timeupdate', onTimeUpdate);
+    video.addEventListener('seeked', onSeeked);
+    return () => {
+      video.removeEventListener('timeupdate', onTimeUpdate);
+      video.removeEventListener('seeked', onSeeked);
+    };
   }, [videoElementRef]);
 
   // Scrub timeline: render crop preview at scrubTime
   const renderScrubCrop = useCallback(() => {
     const video = videoElementRef.current;
     const canvas = scrubCropCanvasRef.current;
-    if (!video || !canvas || focusPoints.length === 0) return;
+    if (!video || !canvas) return;
+    if (video.readyState < 2) return;
 
     const [rW, rH] = PLATFORM_ASPECT_RATIOS[targetPlatform] || [9, 16];
-    const cW = 140;
+    const cW = 240;
     const cH = Math.round(cW / (rW / rH));
     canvas.width = cW;
     canvas.height = cH;
@@ -1133,9 +1140,34 @@ export default function FocusSelector() {
   }, [videoElementRef, focusPoints, targetPlatform, scrubEditLocal]);
 
   useEffect(() => {
-    if (scanStatus === 'idle' && focusPoints.length > 0) {
-      requestAnimationFrame(renderScrubCrop);
+    if (focusPoints.length === 0) return;
+    const video = videoElementRef.current;
+    if (!video) return;
+
+    const tryRender = () => {
+      if (video.readyState >= 2) {
+        requestAnimationFrame(renderScrubCrop);
+      }
+    };
+
+    // Try immediately
+    tryRender();
+
+    // Also try after video loads/seeks (covers initial page load)
+    video.addEventListener('seeked', tryRender);
+    video.addEventListener('loadeddata', tryRender);
+
+    // Force a seek to decode the first frame if video hasn't been touched
+    if (video.readyState < 2) {
+      video.load();
+    } else if (video.paused && video.currentTime === 0) {
+      video.currentTime = 0.01;
     }
+
+    return () => {
+      video.removeEventListener('seeked', tryRender);
+      video.removeEventListener('loadeddata', tryRender);
+    };
   }, [scrubTime, focusPoints, scanStatus, renderScrubCrop, scrubEditLocal]);
 
   const autoFixSegment = useCallback((idx: number) => {
@@ -1584,39 +1616,38 @@ export default function FocusSelector() {
                 </div>
               )}
 
-              {/* Scrub slider + live crop preview */}
-              <div className="flex gap-3 items-start">
-                {/* Live crop at current time */}
-                <div className="shrink-0">
-                  <div className="text-[10px] text-white-dim mb-1 text-center">
-                    {formatTime(scrubTime)}
-                  </div>
-                  <div className={`border-2 ${
-                    focusPoints.find(fp => scrubTime >= fp.time_start && scrubTime < fp.time_end)
-                      ? 'border-orange-accent' : 'border-red-hot'
-                  }`}>
-                    <canvas
-                      ref={scrubCropCanvasRef}
-                      className="block"
-                      style={{ width: '140px' }}
-                    />
-                  </div>
+              {/* Live crop preview — full width */}
+              <div className="mb-2">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] text-white-dim uppercase">
+                    Crop preview at {formatTime(scrubTime)}
+                  </span>
                   {(() => {
                     const activeFp = focusPoints.find(fp => scrubTime >= fp.time_start && scrubTime < fp.time_end);
                     return activeFp ? (
-                      <div className="text-[9px] text-orange-accent text-center mt-1 font-bold uppercase truncate max-w-[140px]">
+                      <span className="text-[10px] text-orange-accent font-bold uppercase truncate">
                         {activeFp.description}
-                      </div>
+                      </span>
                     ) : (
-                      <div className="text-[9px] text-red-hot text-center mt-1 uppercase">
-                        No keyframe — add one!
-                      </div>
+                      <span className="text-[10px] text-red-hot uppercase">
+                        Gap — no keyframe
+                      </span>
                     );
                   })()}
                 </div>
+                <div className={`border-2 mx-auto ${
+                  focusPoints.find(fp => scrubTime >= fp.time_start && scrubTime < fp.time_end)
+                    ? 'border-orange-accent' : 'border-red-hot'
+                }`} style={{ maxWidth: '280px' }}>
+                  <canvas
+                    ref={scrubCropCanvasRef}
+                    className="block w-full"
+                  />
+                </div>
+              </div>
 
-                {/* Controls */}
-                <div className="flex-1 min-w-0 space-y-2">
+              {/* Controls */}
+              <div className="space-y-2">
                   {/* Time scrubber */}
                   <div>
                     <label className="text-[10px] text-white-dim uppercase tracking-wide">Scrub through video</label>
@@ -1658,47 +1689,78 @@ export default function FocusSelector() {
                         }, 300);
                       };
 
+                      const sortedFps = [...focusPoints].sort((a, b) => a.time_start - b.time_start);
+                      const currentIdx = sortedFps.findIndex(fp => fp.id === activeFpForEdit.id);
+                      const prevFp = currentIdx > 0 ? sortedFps[currentIdx - 1] : null;
+                      const nextFp = currentIdx < sortedFps.length - 1 ? sortedFps[currentIdx + 1] : null;
+
                       return (
                         <div className="space-y-1.5 p-2 bg-black-deep border border-orange-accent">
-                          <div className="flex items-center gap-2">
-                            <Move className="w-3 h-3 text-orange-accent" />
-                            <span className="text-[10px] font-bold uppercase text-orange-accent">Reposition this frame</span>
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Move className="w-3 h-3 text-orange-accent" />
+                              <span className="text-[10px] font-bold uppercase text-orange-accent">Reposition this frame</span>
+                            </div>
+                            <span className="text-[9px] text-green-500 uppercase">Auto-saving</span>
+                          </div>
+                          <div className="text-[9px] text-white-dim">
+                            Drag sliders to adjust crop — preview updates live
                           </div>
                           <div>
                             <div className="flex items-center justify-between">
-                              <label className="text-[10px] text-white-dim uppercase">X offset</label>
+                              <label className="text-[10px] text-white-dim uppercase">Horizontal pan</label>
                               <span className="text-[10px] text-white-dim font-mono">{editX.toFixed(0)}%</span>
                             </div>
                             <input
                               type="range" min={0} max={100} step={1}
                               value={editX}
                               onChange={e => handleScrubSlider('x', parseFloat(e.target.value))}
-                              className="w-full h-1.5 accent-orange-accent cursor-pointer"
+                              className="w-full h-2 accent-orange-accent cursor-pointer"
                             />
                           </div>
                           <div>
                             <div className="flex items-center justify-between">
-                              <label className="text-[10px] text-white-dim uppercase">Y offset</label>
+                              <label className="text-[10px] text-white-dim uppercase">Vertical pan</label>
                               <span className="text-[10px] text-white-dim font-mono">{editY.toFixed(0)}%</span>
                             </div>
                             <input
                               type="range" min={0} max={100} step={1}
                               value={editY}
                               onChange={e => handleScrubSlider('y', parseFloat(e.target.value))}
-                              className="w-full h-1.5 accent-orange-accent cursor-pointer"
+                              className="w-full h-2 accent-orange-accent cursor-pointer"
                             />
                           </div>
                           <div>
                             <div className="flex items-center justify-between">
-                              <label className="text-[10px] text-white-dim uppercase">Zoom (width)</label>
+                              <label className="text-[10px] text-white-dim uppercase">Zoom</label>
                               <span className="text-[10px] text-white-dim font-mono">{editW.toFixed(0)}%</span>
                             </div>
                             <input
                               type="range" min={10} max={100} step={1}
                               value={editW}
                               onChange={e => handleScrubSlider('width', parseFloat(e.target.value))}
-                              className="w-full h-1.5 accent-orange-accent cursor-pointer"
+                              className="w-full h-2 accent-orange-accent cursor-pointer"
                             />
+                          </div>
+                          {/* Navigate between keyframes */}
+                          <div className="flex gap-2 pt-1">
+                            <button
+                              disabled={!prevFp}
+                              onClick={() => { if (prevFp) { seekToFrame(prevFp.time_start); setScrubTime(prevFp.time_start); } }}
+                              className="flex-1 px-2 py-1.5 text-[10px] font-bold uppercase border border-border-subtle text-white-dim hover:border-orange-accent hover:text-orange-accent transition-all disabled:opacity-20 disabled:cursor-not-allowed"
+                            >
+                              ← Prev frame
+                            </button>
+                            <span className="text-[9px] text-white-dim self-center">
+                              {currentIdx + 1}/{sortedFps.length}
+                            </span>
+                            <button
+                              disabled={!nextFp}
+                              onClick={() => { if (nextFp) { seekToFrame(nextFp.time_start); setScrubTime(nextFp.time_start); } }}
+                              className="flex-1 px-2 py-1.5 text-[10px] font-bold uppercase border border-border-subtle text-white-dim hover:border-orange-accent hover:text-orange-accent transition-all disabled:opacity-20 disabled:cursor-not-allowed"
+                            >
+                              Next frame →
+                            </button>
                           </div>
                         </div>
                       );
@@ -1789,7 +1851,6 @@ export default function FocusSelector() {
                       );
                     })}
                   </div>
-                </div>
               </div>
             </div>
           )}
