@@ -979,6 +979,10 @@ export default function FocusSelector() {
 
   const liveCropCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  // Scrub & Fix timeline state
+  const [scrubTime, setScrubTime] = useState(0);
+  const scrubCropCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
   const updateSegmentOffset = useCallback((idx: number, axis: 'offset_x' | 'offset_y', value: number) => {
     setAiStrategy(prev => {
       if (!prev) return prev;
@@ -1057,6 +1061,55 @@ export default function FocusSelector() {
     ctx.clearRect(0, 0, cropWidth, cropHeight);
     ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, cropWidth, cropHeight);
   }, [videoElementRef, aiStrategy, targetPlatform, detectedSubjects]);
+
+  // Scrub timeline: sync scrubTime with video timeupdate
+  useEffect(() => {
+    const video = videoElementRef.current;
+    if (!video) return;
+    const onTimeUpdate = () => setScrubTime(video.currentTime);
+    video.addEventListener('timeupdate', onTimeUpdate);
+    return () => video.removeEventListener('timeupdate', onTimeUpdate);
+  }, [videoElementRef]);
+
+  // Scrub timeline: render crop preview at scrubTime
+  const renderScrubCrop = useCallback(() => {
+    const video = videoElementRef.current;
+    const canvas = scrubCropCanvasRef.current;
+    if (!video || !canvas || focusPoints.length === 0) return;
+
+    const [rW, rH] = PLATFORM_ASPECT_RATIOS[targetPlatform] || [9, 16];
+    const cW = 140;
+    const cH = Math.round(cW / (rW / rH));
+    canvas.width = cW;
+    canvas.height = cH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const t = video.currentTime;
+    const activeFp = focusPoints.find(fp => t >= fp.time_start && t < fp.time_end);
+    const focusX = activeFp ? activeFp.x + activeFp.width / 2 : 50;
+    const focusY = activeFp ? activeFp.y + activeFp.height / 2 : 50;
+
+    const vw = video.videoWidth || 1920;
+    const vh = video.videoHeight || 1080;
+    const targetAspect = rW / rH;
+    let srcW: number, srcH: number;
+    if (targetAspect < vw / vh) { srcH = vh; srcW = vh * targetAspect; }
+    else { srcW = vw; srcH = vw / targetAspect; }
+
+    const cx = (focusX / 100) * vw;
+    const cy = (focusY / 100) * vh;
+    const srcX = Math.max(0, Math.min(vw - srcW, cx - srcW / 2));
+    const srcY = Math.max(0, Math.min(vh - srcH, cy - srcH / 2));
+    ctx.clearRect(0, 0, cW, cH);
+    ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, cW, cH);
+  }, [videoElementRef, focusPoints, targetPlatform]);
+
+  useEffect(() => {
+    if (scanStatus === 'idle' && focusPoints.length > 0) {
+      requestAnimationFrame(renderScrubCrop);
+    }
+  }, [scrubTime, focusPoints, scanStatus, renderScrubCrop]);
 
   const autoFixSegment = useCallback((idx: number) => {
     if (!cropReviews || !cropReviews[idx] || !aiStrategy) return;
@@ -1175,6 +1228,75 @@ export default function FocusSelector() {
       setAiLoading(false);
     }
   }, [api, videoId, aiStrategy, cropReviews, detectedSubjects, duration, targetPlatform, storyBrief, annotations, keyFrames]);
+
+  const fillGaps = useCallback(() => {
+    if (!aiStrategy || duration <= 0) return;
+
+    const sorted = [...aiStrategy.segments].sort((a, b) => a.time_start - b.time_start);
+    const gaps: Array<{ time_start: number; time_end: number }> = [];
+
+    // Gap before first segment
+    if (sorted.length === 0 || sorted[0].time_start > 0.5) {
+      gaps.push({ time_start: 0, time_end: sorted.length > 0 ? sorted[0].time_start : duration });
+    }
+
+    // Gaps between segments
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const gapStart = sorted[i].time_end;
+      const gapEnd = sorted[i + 1].time_start;
+      if (gapEnd - gapStart > 0.5) {
+        gaps.push({ time_start: gapStart, time_end: gapEnd });
+      }
+    }
+
+    // Gap after last segment
+    if (sorted.length > 0) {
+      const lastEnd = sorted[sorted.length - 1].time_end;
+      if (duration - lastEnd > 0.5) {
+        gaps.push({ time_start: lastEnd, time_end: duration });
+      }
+    }
+
+    if (gaps.length === 0) return;
+
+    const gapSegments = gaps.map(g => ({
+      time_start: g.time_start,
+      time_end: g.time_end,
+      follow_subject: 'scene',
+      composition: 'center' as const,
+      offset_x: 0,
+      offset_y: 0,
+      transition: 'hard_cut' as const,
+      reason: 'Gap fill — center crop (adjust as needed)',
+    }));
+
+    setAiStrategy(prev => {
+      if (!prev) return prev;
+      const allSegments = [...prev.segments, ...gapSegments].sort((a, b) => a.time_start - b.time_start);
+      return { ...prev, segments: allSegments, reasoning: `${prev.reasoning} [Filled ${gaps.length} gap${gaps.length > 1 ? 's' : ''}]` };
+    });
+    setCropReviews(null);
+  }, [aiStrategy, duration]);
+
+  // Compute gap info for display
+  const gapInfo = useMemo(() => {
+    if (!aiStrategy || duration <= 0) return { count: 0, totalSeconds: 0 };
+    const sorted = [...aiStrategy.segments].sort((a, b) => a.time_start - b.time_start);
+    let gapSeconds = 0;
+    let count = 0;
+
+    if (sorted.length === 0) return { count: 1, totalSeconds: duration };
+
+    if (sorted[0].time_start > 0.5) { gapSeconds += sorted[0].time_start; count++; }
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const gap = sorted[i + 1].time_start - sorted[i].time_end;
+      if (gap > 0.5) { gapSeconds += gap; count++; }
+    }
+    const tailGap = duration - sorted[sorted.length - 1].time_end;
+    if (tailGap > 0.5) { gapSeconds += tailGap; count++; }
+
+    return { count, totalSeconds: gapSeconds };
+  }, [aiStrategy, duration]);
 
   const applyAIStrategy = useCallback(async () => {
     if (!aiStrategy) return;
@@ -1356,19 +1478,187 @@ export default function FocusSelector() {
             </div>
           </details>
 
-          {/* Existing focus points list */}
+          {/* Scrub & Fix timeline editor */}
           {focusPoints.length > 0 && (
             <div className="mt-3 border-t border-border-subtle pt-3">
-              <h4 className="text-xs font-bold text-white-muted uppercase tracking-wide mb-2">Active Focus Points</h4>
-              <div className="space-y-1">
-                {focusPoints.map(fp => (
-                  <div key={fp.id} className="flex items-center justify-between text-xs text-white-muted bg-black-deep p-2 border border-border-subtle">
-                    <span className="text-orange-accent font-bold uppercase">{fp.description}</span>
-                    <span className="text-white-dim">
-                      {formatTime(fp.time_start)} - {formatTime(fp.time_end)}
-                    </span>
+              <div className="flex items-center gap-2 mb-2">
+                <Move className="w-4 h-4 text-orange-accent" />
+                <h4 className="text-xs font-bold text-orange-accent uppercase tracking-wide">Scrub & Fix</h4>
+                <span className="text-[10px] text-white-dim">{focusPoints.length} keyframes</span>
+              </div>
+
+              {/* Coverage timeline bar */}
+              {duration > 0 && (
+                <div className="mb-2">
+                  <div className="relative w-full h-3 bg-black-deep border border-border-subtle">
+                    {focusPoints.map((fp, i) => {
+                      const left = (fp.time_start / duration) * 100;
+                      const width = Math.max(0.5, ((fp.time_end - fp.time_start) / duration) * 100);
+                      return (
+                        <div
+                          key={fp.id}
+                          className="absolute top-0 h-full bg-orange-accent/60 hover:bg-orange-accent transition-colors cursor-pointer"
+                          style={{ left: `${left}%`, width: `${width}%` }}
+                          title={`${fp.description} (${formatTime(fp.time_start)}-${formatTime(fp.time_end)})`}
+                          onClick={() => seekToFrame(fp.time_start)}
+                        />
+                      );
+                    })}
+                    {/* Playhead */}
+                    <div
+                      className="absolute top-0 w-0.5 h-full bg-white z-10"
+                      style={{ left: `${((videoElementRef.current?.currentTime || 0) / duration) * 100}%` }}
+                    />
                   </div>
-                ))}
+                  <div className="flex justify-between text-[8px] text-white-dim/50 mt-0.5">
+                    <span>0:00</span>
+                    <span>{formatTime(duration)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Scrub slider + live crop preview */}
+              <div className="flex gap-3 items-start">
+                {/* Live crop at current time */}
+                <div className="shrink-0">
+                  <div className="text-[10px] text-white-dim mb-1 text-center">
+                    {formatTime(scrubTime)}
+                  </div>
+                  <div className={`border-2 ${
+                    focusPoints.find(fp => scrubTime >= fp.time_start && scrubTime < fp.time_end)
+                      ? 'border-orange-accent' : 'border-red-hot'
+                  }`}>
+                    <canvas
+                      ref={scrubCropCanvasRef}
+                      className="block"
+                      style={{ width: '140px' }}
+                    />
+                  </div>
+                  {(() => {
+                    const activeFp = focusPoints.find(fp => scrubTime >= fp.time_start && scrubTime < fp.time_end);
+                    return activeFp ? (
+                      <div className="text-[9px] text-orange-accent text-center mt-1 font-bold uppercase truncate max-w-[140px]">
+                        {activeFp.description}
+                      </div>
+                    ) : (
+                      <div className="text-[9px] text-red-hot text-center mt-1 uppercase">
+                        No keyframe — add one!
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Controls */}
+                <div className="flex-1 min-w-0 space-y-2">
+                  {/* Time scrubber */}
+                  <div>
+                    <label className="text-[10px] text-white-dim uppercase tracking-wide">Scrub through video</label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={duration}
+                      step={0.1}
+                      value={scrubTime}
+                      onChange={e => {
+                        const t = parseFloat(e.target.value);
+                        setScrubTime(t);
+                        seekToFrame(t);
+                      }}
+                      className="w-full h-2 accent-orange-accent cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Add keyframe button */}
+                  <button
+                    onClick={async () => {
+                      const video = videoElementRef.current;
+                      if (!video || !videoId) return;
+                      const t = video.currentTime;
+                      const existing = focusPoints.find(fp => t >= fp.time_start && t < fp.time_end);
+                      if (existing) return;
+
+                      const before = focusPoints.filter(fp => fp.time_end <= t).sort((a, b) => b.time_end - a.time_end)[0];
+                      const after = focusPoints.filter(fp => fp.time_start > t).sort((a, b) => a.time_start - b.time_start)[0];
+                      const gapStart = before ? before.time_end : 0;
+                      const gapEnd = after ? after.time_start : duration;
+
+                      const newPoint: FocusPointCreate = {
+                        time_start: gapStart,
+                        time_end: gapEnd,
+                        x: 25,
+                        y: 25,
+                        width: 50,
+                        height: 50,
+                        description: `manual_${formatTime(t)}`,
+                        source: 'manual',
+                      };
+                      await addFocusPointsBatch([newPoint]);
+                    }}
+                    disabled={!!focusPoints.find(fp => scrubTime >= fp.time_start && scrubTime < fp.time_end)}
+                    className="w-full px-3 py-2 text-[10px] font-bold uppercase text-white bg-orange-accent border-2 border-orange-accent hover:bg-red-hot hover:border-red-hot transition-all disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+                  >
+                    <PenTool className="w-3 h-3" />
+                    {focusPoints.find(fp => scrubTime >= fp.time_start && scrubTime < fp.time_end)
+                      ? 'Keyframe exists here'
+                      : 'Add Keyframe for this gap'
+                    }
+                  </button>
+
+                  {/* Fill all gaps shortcut */}
+                  {(() => {
+                    const gaps: Array<{ start: number; end: number }> = [];
+                    const sorted = [...focusPoints].sort((a, b) => a.time_start - b.time_start);
+                    if (sorted.length === 0) return null;
+                    if (sorted[0].time_start > 0.5) gaps.push({ start: 0, end: sorted[0].time_start });
+                    for (let i = 0; i < sorted.length - 1; i++) {
+                      const g = sorted[i + 1].time_start - sorted[i].time_end;
+                      if (g > 0.5) gaps.push({ start: sorted[i].time_end, end: sorted[i + 1].time_start });
+                    }
+                    const tail = duration - sorted[sorted.length - 1].time_end;
+                    if (tail > 0.5) gaps.push({ start: sorted[sorted.length - 1].time_end, end: duration });
+                    if (gaps.length === 0) return null;
+                    return (
+                      <button
+                        onClick={async () => {
+                          const newPoints: FocusPointCreate[] = gaps.map(g => ({
+                            time_start: g.start,
+                            time_end: g.end,
+                            x: 25, y: 25, width: 50, height: 50,
+                            description: `fill_${formatTime(g.start)}`,
+                            source: 'manual' as const,
+                          }));
+                          await addFocusPointsBatch(newPoints);
+                        }}
+                        className="w-full px-3 py-1.5 text-[10px] font-bold uppercase text-yellow-500 bg-yellow-500/10 border border-yellow-500/30 hover:bg-yellow-500/20 transition-all flex items-center justify-center gap-1"
+                      >
+                        <AlertTriangle className="w-3 h-3" />
+                        Auto-fill {gaps.length} gap{gaps.length > 1 ? 's' : ''} with center crop
+                      </button>
+                    );
+                  })()}
+
+                  {/* Focus point list — compact */}
+                  <div className="max-h-32 overflow-y-auto space-y-0.5">
+                    {[...focusPoints].sort((a, b) => a.time_start - b.time_start).map(fp => {
+                      const isActive = scrubTime >= fp.time_start && scrubTime < fp.time_end;
+                      return (
+                        <div
+                          key={fp.id}
+                          className={`flex items-center gap-2 text-[10px] p-1.5 cursor-pointer transition-all ${
+                            isActive ? 'bg-orange-accent/20 border border-orange-accent' : 'bg-black-deep border border-border-subtle hover:border-orange-accent/50'
+                          }`}
+                          onClick={() => { seekToFrame(fp.time_start); setScrubTime(fp.time_start); }}
+                        >
+                          <span className="text-white-dim font-mono shrink-0">{formatTime(fp.time_start)}</span>
+                          <span className={`font-bold uppercase truncate ${fp.source === 'manual' ? 'text-yellow-500' : 'text-orange-accent'}`}>
+                            {fp.description}
+                          </span>
+                          <span className="text-white-dim/50 ml-auto shrink-0">{((fp.time_end - fp.time_start)).toFixed(1)}s</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -1733,6 +2023,50 @@ export default function FocusSelector() {
 
                   <p className="text-xs text-white-muted">{aiStrategy.reasoning}</p>
 
+                  {/* Coverage timeline */}
+                  {duration > 0 && (
+                    <div className="mb-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[10px] text-white-dim uppercase">Timeline coverage</span>
+                        {gapInfo.count > 0 && (
+                          <span className="text-[10px] text-red-hot">{gapInfo.count} gap{gapInfo.count > 1 ? 's' : ''}</span>
+                        )}
+                        {gapInfo.count === 0 && (
+                          <span className="text-[10px] text-green-500">100% covered</span>
+                        )}
+                      </div>
+                      <div className="relative w-full h-2 bg-red-hot/30 border border-border-subtle">
+                        {aiStrategy.segments.map((seg, i) => {
+                          const left = (seg.time_start / duration) * 100;
+                          const width = Math.max(0.3, ((seg.time_end - seg.time_start) / duration) * 100);
+                          const review = cropReviews?.[i];
+                          const color = review
+                            ? review.quality === 'good' ? 'bg-green-500' : review.quality === 'bad' ? 'bg-red-hot' : 'bg-yellow-500'
+                            : 'bg-orange-accent';
+                          return (
+                            <div
+                              key={i}
+                              className={`absolute top-0 h-full ${color} cursor-pointer hover:opacity-80 transition-opacity`}
+                              style={{ left: `${left}%`, width: `${width}%` }}
+                              onClick={() => { setExpandedSegIdx(i); seekToFrame((seg.time_start + seg.time_end) / 2); }}
+                              title={`${seg.follow_subject} (${formatTime(seg.time_start)}-${formatTime(seg.time_end)})`}
+                            />
+                          );
+                        })}
+                      </div>
+                      <div className="flex gap-3 mt-0.5">
+                        <span className="text-[8px] text-white-dim/50 flex items-center gap-1"><span className="w-2 h-2 bg-orange-accent inline-block" /> covered</span>
+                        <span className="text-[8px] text-white-dim/50 flex items-center gap-1"><span className="w-2 h-2 bg-red-hot/30 inline-block" /> gap</span>
+                        {cropReviews && (
+                          <>
+                            <span className="text-[8px] text-white-dim/50 flex items-center gap-1"><span className="w-2 h-2 bg-green-500 inline-block" /> QA ok</span>
+                            <span className="text-[8px] text-white-dim/50 flex items-center gap-1"><span className="w-2 h-2 bg-yellow-500 inline-block" /> adjust</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {/* QA summary bar */}
                   {cropReviews && !reviewLoading && (
                     <div className="flex items-center gap-2 p-2 bg-black-card border border-border-subtle">
@@ -1921,6 +2255,22 @@ export default function FocusSelector() {
                       );
                     })}
                   </div>
+
+                  {/* Gap coverage warning */}
+                  {gapInfo.count > 0 && (
+                    <div className="flex items-center gap-2 p-2 bg-yellow-500/10 border border-yellow-500/30">
+                      <AlertTriangle className="w-4 h-4 text-yellow-500 shrink-0" />
+                      <span className="text-[10px] text-yellow-500">
+                        {gapInfo.count} gap{gapInfo.count > 1 ? 's' : ''} ({Math.round(gapInfo.totalSeconds)}s uncovered) — these frames will default to center crop
+                      </span>
+                      <button
+                        onClick={fillGaps}
+                        className="ml-auto px-2 py-1 text-[10px] font-bold uppercase text-black bg-yellow-500 hover:bg-yellow-400 transition-colors shrink-0"
+                      >
+                        Fill Gaps
+                      </button>
+                    </div>
+                  )}
 
                   {/* Action buttons */}
                   <div className="flex gap-2">
