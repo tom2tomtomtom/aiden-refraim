@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useVideo } from '../../contexts/VideoContext';
 import { useFocusPoints } from '../../contexts/FocusPointsContext';
 import { useApi } from '../../contexts/ApiContext';
@@ -7,7 +7,18 @@ import type { Subject as ScannerSubject } from '../../services/VideoScannerServi
 import type { Subject, ScanOptions, ScanStatus } from '../../types/scan';
 import type { FocusPointCreate } from '../../types/focusPoint';
 import { segmentPositionsToFocusPoints } from '../../services/FocusInterpolationService';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, Play, Pause } from 'lucide-react';
+
+const PLATFORM_ASPECT_RATIOS: Record<string, [number, number]> = {
+  'tiktok': [9, 16],
+  'instagram-story': [9, 16],
+  'instagram-feed-square': [1, 1],
+  'instagram-feed-portrait': [4, 5],
+  'youtube-shorts': [9, 16],
+  'youtube-main': [16, 9],
+  'facebook-story': [9, 16],
+  'facebook-feed': [1, 1],
+};
 
 interface AIStrategy {
   segments: Array<{
@@ -60,6 +71,179 @@ function convertScannerSubjects(
       score: p.score,
     })),
   }));
+}
+
+function AIReframePreview({
+  strategy,
+  platform,
+  detectedSubjects,
+}: {
+  strategy: AIStrategy;
+  platform: string;
+  detectedSubjects: Subject[];
+}) {
+  const { videoUrl, videoElementRef, isPlaying, currentTime } = useVideo();
+  const previewRef = useRef<HTMLVideoElement>(null);
+  const [previewPlaying, setPreviewPlaying] = useState(false);
+
+  const [ratioW, ratioH] = PLATFORM_ASPECT_RATIOS[platform] || [9, 16];
+  const previewWidth = 280;
+  const previewHeight = Math.round(previewWidth / (ratioW / ratioH));
+
+  // Sync preview with main video time
+  useEffect(() => {
+    const main = videoElementRef.current;
+    const preview = previewRef.current;
+    if (!main || !preview) return;
+
+    let raf: number;
+    const sync = () => {
+      if (Math.abs(preview.currentTime - main.currentTime) > 0.15) {
+        preview.currentTime = main.currentTime;
+      }
+      raf = requestAnimationFrame(sync);
+    };
+    raf = requestAnimationFrame(sync);
+    return () => cancelAnimationFrame(raf);
+  }, [videoElementRef, videoUrl]);
+
+  // Mirror play/pause
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview) return;
+    if (isPlaying) {
+      preview.play().catch(() => {});
+      setPreviewPlaying(true);
+    } else {
+      preview.pause();
+      setPreviewPlaying(false);
+    }
+  }, [isPlaying]);
+
+  // Compute focus position from AI strategy at current time
+  const focusPosition = useMemo(() => {
+    const t = currentTime;
+    const activeSeg = strategy.segments.find(
+      s => t >= s.time_start && t < s.time_end
+    ) || strategy.segments[strategy.segments.length - 1];
+
+    if (!activeSeg) return { x: 50, y: 50 };
+
+    const subject = detectedSubjects.find(s => s.class === activeSeg.follow_subject);
+    if (!subject || subject.positions.length === 0) {
+      return { x: 50 + (activeSeg.offset_x || 0), y: 50 + (activeSeg.offset_y || 0) };
+    }
+
+    const positions = subject.positions.filter(
+      p => p.time >= activeSeg.time_start && p.time <= activeSeg.time_end
+    );
+    const pool = positions.length > 0 ? positions : subject.positions;
+
+    const avgX = pool.reduce((s, p) => s + p.bbox[0] + p.bbox[2] / 2, 0) / pool.length;
+    const avgY = pool.reduce((s, p) => s + p.bbox[1] + p.bbox[3] / 2, 0) / pool.length;
+
+    return {
+      x: Math.max(0, Math.min(100, avgX + (activeSeg.offset_x || 0))),
+      y: Math.max(0, Math.min(100, avgY + (activeSeg.offset_y || 0))),
+    };
+  }, [currentTime, strategy, detectedSubjects]);
+
+  const activeSegIdx = strategy.segments.findIndex(
+    s => currentTime >= s.time_start && currentTime < s.time_end
+  );
+  const activeSeg = activeSegIdx >= 0 ? strategy.segments[activeSegIdx] : null;
+
+  const togglePlay = useCallback(() => {
+    const main = videoElementRef.current;
+    if (!main) return;
+    if (main.paused) { main.play(); } else { main.pause(); }
+  }, [videoElementRef]);
+
+  if (!videoUrl) return null;
+
+  return (
+    <div className="mt-3 mb-3">
+      <div className="flex items-center gap-2 mb-2">
+        <div className="w-2 h-2 bg-green-500 animate-pulse rounded-full" />
+        <span className="text-[10px] font-bold text-white-muted uppercase tracking-wide">
+          Live Reframe Preview — {platform.replace(/-/g, ' ')} ({ratioW}:{ratioH})
+        </span>
+      </div>
+
+      <div className="flex gap-3 items-start">
+        {/* Reframed preview */}
+        <div className="relative shrink-0">
+          <div
+            className="overflow-hidden bg-black-ink border-2 border-orange-accent"
+            style={{ width: `${previewWidth}px`, height: `${previewHeight}px` }}
+          >
+            <video
+              ref={previewRef}
+              src={videoUrl}
+              crossOrigin="anonymous"
+              className="w-full h-full"
+              style={{
+                objectFit: 'cover',
+                objectPosition: `${focusPosition.x}% ${focusPosition.y}%`,
+              }}
+              muted
+              playsInline
+              preload="auto"
+            />
+          </div>
+          <button
+            onClick={togglePlay}
+            className="absolute bottom-2 left-2 bg-black/70 p-1.5 border border-border-subtle hover:bg-black/90 transition-colors"
+          >
+            {previewPlaying ? (
+              <Pause className="w-3 h-3 text-white" />
+            ) : (
+              <Play className="w-3 h-3 text-white" />
+            )}
+          </button>
+        </div>
+
+        {/* Active segment info */}
+        <div className="flex-1 min-w-0">
+          <div className="text-[10px] text-white-dim uppercase tracking-wide mb-1">Current Segment</div>
+          {activeSeg ? (
+            <div className="bg-black-card border border-border-subtle p-2 space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-orange-accent font-bold uppercase text-xs">{activeSeg.follow_subject}</span>
+                <span className={`text-[10px] px-1 ${activeSeg.transition === 'hard_cut' ? 'text-red-hot' : 'text-green-500'}`}>
+                  {activeSeg.transition === 'hard_cut' ? 'CUT' : 'PAN'}
+                </span>
+              </div>
+              <div className="text-[10px] text-white-dim">{activeSeg.composition}</div>
+              <div className="text-[10px] text-white-dim font-mono">
+                {activeSeg.time_start.toFixed(1)}s — {activeSeg.time_end.toFixed(1)}s
+              </div>
+              {activeSeg.reason && (
+                <div className="text-[10px] text-white-dim italic">{activeSeg.reason}</div>
+              )}
+            </div>
+          ) : (
+            <div className="text-[10px] text-white-dim italic">No segment at current time</div>
+          )}
+
+          {/* Segment timeline mini-bar */}
+          <div className="mt-2 flex gap-px h-2">
+            {strategy.segments.map((seg, idx) => {
+              const widthPct = ((seg.time_end - seg.time_start) / (strategy.segments[strategy.segments.length - 1]?.time_end || 1)) * 100;
+              return (
+                <div
+                  key={idx}
+                  className={`h-full transition-colors ${idx === activeSegIdx ? 'bg-orange-accent' : 'bg-border-subtle'}`}
+                  style={{ width: `${widthPct}%` }}
+                  title={`${seg.follow_subject} ${seg.time_start.toFixed(1)}s-${seg.time_end.toFixed(1)}s`}
+                />
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function FocusSelector() {
@@ -739,6 +923,12 @@ export default function FocusSelector() {
               {/* AI Strategy Results */}
               {aiStrategy && (
                 <div className="space-y-2">
+                  <AIReframePreview
+                    strategy={aiStrategy}
+                    platform={targetPlatform}
+                    detectedSubjects={detectedSubjects}
+                  />
+
                   <p className="text-xs text-white-muted">{aiStrategy.reasoning}</p>
 
                   <div className="max-h-64 overflow-y-auto space-y-1">
