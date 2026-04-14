@@ -988,6 +988,20 @@ export default function FocusSelector() {
   const [scrubTime, setScrubTime] = useState(0);
   const scrubCropCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  // Local overrides for scrub-edit sliders (instant response, debounced save)
+  const [scrubEditLocal, setScrubEditLocal] = useState<{ id: string; x: number; y: number; width: number; height: number } | null>(null);
+  const scrubEditTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clear local slider overrides when scrubbing to a different point
+  useEffect(() => {
+    if (scrubEditLocal) {
+      const activeFp = focusPoints.find(fp => scrubTime >= fp.time_start && scrubTime < fp.time_end);
+      if (!activeFp || activeFp.id !== scrubEditLocal.id) {
+        setScrubEditLocal(null);
+      }
+    }
+  }, [scrubTime]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const updateSegmentOffset = useCallback((idx: number, axis: 'offset_x' | 'offset_y', value: number) => {
     setAiStrategy(prev => {
       if (!prev) return prev;
@@ -1092,8 +1106,16 @@ export default function FocusSelector() {
 
     const t = video.currentTime;
     const activeFp = focusPoints.find(fp => t >= fp.time_start && t < fp.time_end);
-    const focusX = activeFp ? activeFp.x + activeFp.width / 2 : 50;
-    const focusY = activeFp ? activeFp.y + activeFp.height / 2 : 50;
+
+    // Use local slider overrides if they match the active focus point
+    const useLocal = scrubEditLocal && activeFp && scrubEditLocal.id === activeFp.id;
+    const fpX = useLocal ? scrubEditLocal.x : activeFp?.x;
+    const fpY = useLocal ? scrubEditLocal.y : activeFp?.y;
+    const fpW = useLocal ? scrubEditLocal.width : activeFp?.width;
+    const fpH = useLocal ? scrubEditLocal.height : activeFp?.height;
+
+    const focusX = activeFp ? (fpX! + fpW! / 2) : 50;
+    const focusY = activeFp ? (fpY! + fpH! / 2) : 50;
 
     const vw = video.videoWidth || 1920;
     const vh = video.videoHeight || 1080;
@@ -1108,13 +1130,13 @@ export default function FocusSelector() {
     const srcY = Math.max(0, Math.min(vh - srcH, cy - srcH / 2));
     ctx.clearRect(0, 0, cW, cH);
     ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, cW, cH);
-  }, [videoElementRef, focusPoints, targetPlatform]);
+  }, [videoElementRef, focusPoints, targetPlatform, scrubEditLocal]);
 
   useEffect(() => {
     if (scanStatus === 'idle' && focusPoints.length > 0) {
       requestAnimationFrame(renderScrubCrop);
     }
-  }, [scrubTime, focusPoints, scanStatus, renderScrubCrop]);
+  }, [scrubTime, focusPoints, scanStatus, renderScrubCrop, scrubEditLocal]);
 
   const autoFixSegment = useCallback((idx: number) => {
     if (!cropReviews || !cropReviews[idx] || !aiStrategy) return;
@@ -1617,6 +1639,25 @@ export default function FocusSelector() {
                   {(() => {
                     const activeFpForEdit = focusPoints.find(fp => scrubTime >= fp.time_start && scrubTime < fp.time_end);
                     if (activeFpForEdit) {
+                      const isLocalMatch = scrubEditLocal && scrubEditLocal.id === activeFpForEdit.id;
+                      const editX = isLocalMatch ? scrubEditLocal.x : activeFpForEdit.x;
+                      const editY = isLocalMatch ? scrubEditLocal.y : activeFpForEdit.y;
+                      const editW = isLocalMatch ? scrubEditLocal.width : activeFpForEdit.width;
+
+                      const handleScrubSlider = (field: 'x' | 'y' | 'width', val: number) => {
+                        const prev = scrubEditLocal && scrubEditLocal.id === activeFpForEdit.id
+                          ? scrubEditLocal
+                          : { id: activeFpForEdit.id, x: activeFpForEdit.x, y: activeFpForEdit.y, width: activeFpForEdit.width, height: activeFpForEdit.height };
+                        const next = { ...prev, [field]: val };
+                        if (field === 'width') next.height = val;
+                        setScrubEditLocal(next);
+
+                        if (scrubEditTimerRef.current) clearTimeout(scrubEditTimerRef.current);
+                        scrubEditTimerRef.current = setTimeout(() => {
+                          updateFocusPoint(activeFpForEdit.id, { [field]: val, ...(field === 'width' ? { height: val } : {}) });
+                        }, 300);
+                      };
+
                       return (
                         <div className="space-y-1.5 p-2 bg-black-deep border border-orange-accent">
                           <div className="flex items-center gap-2">
@@ -1626,45 +1667,36 @@ export default function FocusSelector() {
                           <div>
                             <div className="flex items-center justify-between">
                               <label className="text-[10px] text-white-dim uppercase">X offset</label>
-                              <span className="text-[10px] text-white-dim font-mono">{activeFpForEdit.x.toFixed(0)}%</span>
+                              <span className="text-[10px] text-white-dim font-mono">{editX.toFixed(0)}%</span>
                             </div>
                             <input
                               type="range" min={0} max={100} step={1}
-                              value={activeFpForEdit.x}
-                              onChange={e => {
-                                const val = parseFloat(e.target.value);
-                                updateFocusPoint(activeFpForEdit.id, { x: val });
-                              }}
+                              value={editX}
+                              onChange={e => handleScrubSlider('x', parseFloat(e.target.value))}
                               className="w-full h-1.5 accent-orange-accent cursor-pointer"
                             />
                           </div>
                           <div>
                             <div className="flex items-center justify-between">
                               <label className="text-[10px] text-white-dim uppercase">Y offset</label>
-                              <span className="text-[10px] text-white-dim font-mono">{activeFpForEdit.y.toFixed(0)}%</span>
+                              <span className="text-[10px] text-white-dim font-mono">{editY.toFixed(0)}%</span>
                             </div>
                             <input
                               type="range" min={0} max={100} step={1}
-                              value={activeFpForEdit.y}
-                              onChange={e => {
-                                const val = parseFloat(e.target.value);
-                                updateFocusPoint(activeFpForEdit.id, { y: val });
-                              }}
+                              value={editY}
+                              onChange={e => handleScrubSlider('y', parseFloat(e.target.value))}
                               className="w-full h-1.5 accent-orange-accent cursor-pointer"
                             />
                           </div>
                           <div>
                             <div className="flex items-center justify-between">
                               <label className="text-[10px] text-white-dim uppercase">Zoom (width)</label>
-                              <span className="text-[10px] text-white-dim font-mono">{activeFpForEdit.width.toFixed(0)}%</span>
+                              <span className="text-[10px] text-white-dim font-mono">{editW.toFixed(0)}%</span>
                             </div>
                             <input
                               type="range" min={10} max={100} step={1}
-                              value={activeFpForEdit.width}
-                              onChange={e => {
-                                const val = parseFloat(e.target.value);
-                                updateFocusPoint(activeFpForEdit.id, { width: val, height: val });
-                              }}
+                              value={editW}
+                              onChange={e => handleScrubSlider('width', parseFloat(e.target.value))}
                               className="w-full h-1.5 accent-orange-accent cursor-pointer"
                             />
                           </div>
