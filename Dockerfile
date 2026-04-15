@@ -6,8 +6,8 @@ RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
 # Vite needs these at build time (anon key is public, safe for client bundles)
-ENV VITE_SUPABASE_URL=https://zeqavhwlappnlkemgiyn.supabase.co
-ENV VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InplcWF2aHdsYXBwbmxrZW1naXluIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU5OTk1NDMsImV4cCI6MjA5MTU3NTU0M30.jnclVnHUUnQrqMOeNWjb1BYetzM5o1SByKuOnxE3yMA
+ENV VITE_SUPABASE_URL=https://bktujlufguenjytbdndn.supabase.co
+ENV VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJrdHVqbHVmZ3Vlbmp5dGJkbmRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNzI1MDksImV4cCI6MjA5MTc0ODUwOX0.yzQi8ra2hchZWLz-Ro4-DtgEqJFt_Y6g2KujoiBm550
 ENV VITE_API_URL=/api
 
 
