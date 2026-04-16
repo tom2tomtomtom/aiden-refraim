@@ -114,8 +114,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Clear any stored auth data from localStorage
       localStorage.removeItem('supabase.auth.token');
       
-      // Redirect to login page
-      window.location.href = '/login';
+      // Redirect to Gateway for centralized logout
+      window.location.href = 'https://www.aiden.services/auth/logout';
     } catch (error) {
       throw error;
     }

@@ -164,6 +164,15 @@ export function Login() {
                 : "Don't have an account? Sign up"}
             </button>
           </div>
+
+          <div className="text-center pt-2 border-t border-border-subtle">
+            <a
+              href="https://www.aiden.services/dashboard"
+              className="text-xs text-white-dim uppercase tracking-wide hover:text-orange-accent transition-colors"
+            >
+              ← Back to AIDEN Hub
+            </a>
+          </div>
         </form>
       </div>
     </div>
