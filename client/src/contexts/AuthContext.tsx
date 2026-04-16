@@ -21,15 +21,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const tryGatewaySSO = async (): Promise<boolean> => {
+      if (!window.location.hostname.endsWith('.aiden.services')) return false;
+      try {
+        const res = await fetch('https://www.aiden.services/api/auth/session', {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (!res.ok) return false;
+        const data = await res.json();
+        if (data.access_token && data.refresh_token) {
+          const { error } = await supabase.auth.setSession({
+            access_token: data.access_token,
+            refresh_token: data.refresh_token,
+          });
+          return !error;
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    };
+
     const initializeAuth = async () => {
       try {
-        // Get current session
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
         
-        if (sessionError) return;
+        if (sessionError) {
+          await tryGatewaySSO();
+          const { data: { session: retrySession } } = await supabase.auth.getSession();
+          if (retrySession?.access_token) {
+            setSession(retrySession);
+            setUser(retrySession.user);
+            setJwt(retrySession.access_token);
+          }
+          return;
+        }
 
         if (session?.access_token) {
-          // Verify token is valid
           const { data: { user }, error: userError } = await supabase.auth.getUser(session.access_token);
           
           if (userError || !user) {
@@ -49,6 +78,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setJwt(session.access_token);
           }
         } else {
+          const ssoWorked = await tryGatewaySSO();
+          if (ssoWorked) {
+            const { data: { session: ssoSession } } = await supabase.auth.getSession();
+            if (ssoSession?.access_token) {
+              setSession(ssoSession);
+              setUser(ssoSession.user);
+              setJwt(ssoSession.access_token);
+              return;
+            }
+          }
           setSession(null);
           setUser(null);
           setJwt(null);
