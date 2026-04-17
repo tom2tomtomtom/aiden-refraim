@@ -21,13 +21,17 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
     }
   }, []);
 
+  // Keep this aligned with the server's multer limit in server/src/routes/videoRoutes.ts
+  const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100MB
+  const MAX_UPLOAD_MB = Math.round(MAX_UPLOAD_BYTES / (1024 * 1024));
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
       'video/*': ['.mp4', '.mov', '.avi']
     },
     maxFiles: 1,
-    maxSize: 500 * 1024 * 1024, // 500MB
+    maxSize: MAX_UPLOAD_BYTES,
   });
 
   const { jwt } = useAuth();
@@ -50,10 +54,8 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
       return;
     }
 
-    // Validate file size (500MB)
-    const maxSize = 500 * 1024 * 1024;
-    if (file.size > maxSize) {
-      onError(new Error(`File too large: ${(file.size / 1024 / 1024).toFixed(2)}MB. Maximum size is 500MB.`));
+    if (file.size > MAX_UPLOAD_BYTES) {
+      onError(new Error(`File too large: ${(file.size / 1024 / 1024).toFixed(2)}MB. Maximum size is ${MAX_UPLOAD_MB}MB.`));
       return;
     }
 
@@ -73,10 +75,11 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
       }, 500);
 
       const apiClient = new ApiClient(jwt);
-      const response = await apiClient.uploadVideo(
-        file,
-        ['youtube', 'instagram', 'tiktok'] // TODO: Make this configurable
-      );
+      // Platforms are selected later in the editor/process step. Sending an
+      // empty array here avoids tripping the server's platform allowlist with
+      // bogus values like ["youtube","instagram","tiktok"] that don't match
+      // its canonical ids (youtube-main, instagram-story, etc.).
+      const response = await apiClient.uploadVideo(file, []);
 
       clearInterval(progressInterval);
       setUploadProgress(100);
@@ -141,7 +144,7 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
               Drag and drop a video file here, or click to select
             </p>
             <p className="text-sm text-white-dim">
-              MP4, MOV, or AVI (max 500MB)
+              MP4, MOV, or AVI (max {MAX_UPLOAD_MB}MB)
             </p>
           </div>
         )}

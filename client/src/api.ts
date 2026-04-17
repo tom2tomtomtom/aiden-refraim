@@ -127,26 +127,23 @@ export class ApiClient {
   }
 
   async uploadVideo(file: File, platforms: string[]): Promise<Video> {
-    // Validate file
     if (!(file instanceof File)) {
       throw new Error('Invalid file object');
     }
 
-    // Validate file type
     const validTypes = ['video/mp4', 'video/quicktime', 'video/x-msvideo'];
     if (!validTypes.includes(file.type)) {
       throw new Error(`Invalid file type: ${file.type}. Supported types: ${validTypes.join(', ')}`);
     }
 
-    // Validate file size (500MB)
-    const maxSize = 500 * 1024 * 1024;
+    // Matches the server's multer fileSize limit.
+    const maxSize = 100 * 1024 * 1024;
     if (file.size > maxSize) {
-      throw new Error(`File too large: ${(file.size / 1024 / 1024).toFixed(2)}MB. Maximum size is 500MB.`);
+      throw new Error(`File too large: ${(file.size / 1024 / 1024).toFixed(2)}MB. Maximum size is 100MB.`);
     }
 
-    // Validate platforms
-    if (!Array.isArray(platforms) || platforms.length === 0) {
-      throw new Error('Please specify at least one target platform');
+    if (!Array.isArray(platforms)) {
+      throw new Error('platforms must be an array');
     }
 
     const formData = new FormData();
