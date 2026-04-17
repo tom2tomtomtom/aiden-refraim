@@ -1,23 +1,58 @@
 import { Request, Response } from 'express';
+import fs from 'fs';
 import { processVideoForPlatforms } from '../services/videoProcessingService';
 import { StorageService } from '../services/storageService';
 import { DatabaseService } from '../services/databaseService';
 import { supabase } from '../config/supabase';
 import { checkTokens, deductTokens } from '../lib/gateway-tokens';
 
+const VALID_PLATFORMS = [
+  'instagram-story',
+  'instagram-feed-square',
+  'instagram-feed-portrait',
+  'facebook-story',
+  'facebook-feed',
+  'tiktok',
+  'youtube-main',
+  'youtube-shorts',
+] as const;
+
+function sanitizePlatforms(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of input) {
+    if (typeof p !== 'string') continue;
+    if (!(VALID_PLATFORMS as readonly string[]).includes(p)) continue;
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+  }
+  return out;
+}
+
+function safeUnlink(filePath: string | undefined): void {
+  if (!filePath) return;
+  fs.promises.unlink(filePath).catch((err) => {
+    // ENOENT is fine — storage service may have already removed it.
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      console.warn('[upload] Failed to clean up temp file:', filePath, err);
+    }
+  });
+}
+
 export const uploadVideo = async (req: Request, res: Response) => {
   console.log('Starting video upload process');
-  
+  const tempPath = req.file?.path;
+
   try {
-    // 1. Authenticate user
-    console.log('Authenticating user...');
     const user = (req as any).user;
     if (!user) {
+      safeUnlink(tempPath);
       return res.status(401).json({ error: 'Unauthorized' });
     }
     console.log('User authenticated:', { id: user.id, email: user.email });
 
-    // 2. Validate request
     if (!req.file) {
       console.error('No file in request');
       return res.status(400).json({ error: 'No video file provided' });
@@ -27,28 +62,37 @@ export const uploadVideo = async (req: Request, res: Response) => {
       name: req.file.originalname,
       size: req.file.size,
       type: req.file.mimetype,
-      path: req.file.path
+      path: req.file.path,
     });
 
-    // 3. Upload to storage
-    console.log('Uploading to storage...');
-    const videoUrl = await StorageService.uploadVideo(req.file.path, req.file.originalname);
-    console.log('Upload successful:', { url: videoUrl });
-
-    // 4. Parse platforms
-    let platforms: string[] = [];
+    // Parse + validate platforms BEFORE uploading to storage to avoid wasting
+    // bandwidth and leaving orphan objects behind on bad input.
+    let rawPlatforms: unknown = [];
     try {
-      platforms = req.body.platforms ? JSON.parse(req.body.platforms) : [];
-      console.log('Parsed platforms:', platforms);
+      rawPlatforms = req.body.platforms ? JSON.parse(req.body.platforms) : [];
     } catch (e) {
       console.warn('Failed to parse platforms:', e);
-      return res.status(400).json({ 
+      safeUnlink(tempPath);
+      return res.status(400).json({
         error: 'Invalid platforms format',
-        details: e instanceof Error ? e.message : 'Unknown error'
+        details: e instanceof Error ? e.message : 'Unknown error',
+      });
+    }
+    const platforms = sanitizePlatforms(rawPlatforms);
+    if (Array.isArray(rawPlatforms) && rawPlatforms.length > 0 && platforms.length === 0) {
+      safeUnlink(tempPath);
+      return res.status(400).json({
+        error: 'No valid platforms provided',
+        allowed: VALID_PLATFORMS,
       });
     }
 
-    // 5. Create database record
+    console.log('Uploading to storage...');
+    // StorageService.uploadVideo deletes the temp file on success. We still
+    // schedule a safeUnlink on its failure paths below.
+    const videoUrl = await StorageService.uploadVideo(req.file.path, req.file.originalname);
+    console.log('Upload successful:', { url: videoUrl });
+
     console.log('Creating database record...');
     const video = await DatabaseService.createVideo({
       original_url: videoUrl,
@@ -58,40 +102,39 @@ export const uploadVideo = async (req: Request, res: Response) => {
       ...(req.body.title && { title: req.body.title }),
       ...(req.body.description && { description: req.body.description }),
     });
-    
-    console.log('Video record created:', { 
+
+    console.log('Video record created:', {
       id: video.id,
       url: video.original_url,
-      platforms: video.platforms
+      platforms: video.platforms,
     });
 
     res.status(201).json(video);
   } catch (error) {
+    safeUnlink(tempPath);
     console.error('Error in uploadVideo:', {
       error,
       file: req.file,
-      body: req.body,
-      user: (req as any).user
+      user: (req as any).user,
     });
 
-    // Determine error type and send appropriate response
     if (error instanceof Error) {
       if (error.message.includes('storage')) {
-        return res.status(500).json({ 
+        return res.status(500).json({
           error: 'Storage error',
-          details: error.message
+          details: error.message,
         });
       } else if (error.message.includes('database')) {
-        return res.status(500).json({ 
+        return res.status(500).json({
           error: 'Database error',
-          details: error.message
+          details: error.message,
         });
       }
     }
 
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Error uploading video',
-      details: error instanceof Error ? error.message : 'Unknown error'
+      details: error instanceof Error ? error.message : 'Unknown error',
     });
   }
 };
@@ -157,10 +200,18 @@ export const processVideo = async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
-    const { platforms } = req.body;
+    const rawPlatforms = req.body?.platforms;
 
-    if (!platforms || !Array.isArray(platforms)) {
+    if (!rawPlatforms || !Array.isArray(rawPlatforms)) {
       return res.status(400).json({ error: 'Invalid platforms specified' });
+    }
+
+    const platforms = sanitizePlatforms(rawPlatforms);
+    if (platforms.length === 0) {
+      return res.status(400).json({
+        error: 'No valid platforms provided',
+        allowed: VALID_PLATFORMS,
+      });
     }
 
     const video = await DatabaseService.getVideo(id);

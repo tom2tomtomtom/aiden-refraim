@@ -115,7 +115,7 @@ app.get('*', (req, res, next) => {
 });
 
 // Error handling with detailed logging
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const errorDetails = {
     message: err.message,
     stack: err.stack,
@@ -123,17 +123,23 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
     path: req.path,
     method: req.method,
     userId: (req as any).user?.id,
-    body: req.body,
+    // Don't log raw req.body — it can contain auth tokens, file buffers, or PII.
+    bodyKeys: req.body && typeof req.body === 'object' ? Object.keys(req.body) : undefined,
     query: req.query,
-    file: req.file
+    fileMeta: req.file
+      ? { name: req.file.originalname, size: req.file.size, mime: req.file.mimetype }
+      : undefined,
   };
-  
+
   console.error('Application error:', errorDetails);
-  
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal server error',
+
+  // In production don't leak stack traces or internal error messages to the client.
+  const isProd = process.env.NODE_ENV === 'production';
+  const status = err.status || 500;
+  res.status(status).json({
+    error: isProd && status >= 500 ? 'Internal server error' : (err.message || 'Internal server error'),
     code: err.code,
-    type: err.name
+    type: err.name,
   });
 });
 

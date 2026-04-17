@@ -213,10 +213,25 @@ export class StorageService {
 
   static async deleteVideo(videoUrl: string): Promise<void> {
     try {
-      const pathMatch = videoUrl.match(/\/storage\/v1\/object\/public\/${STORAGE_BUCKET}\/(.*)/);
-      if (!pathMatch) throw new Error('Invalid video URL');
+      // Supabase public URLs look like:
+      //   https://<project>.supabase.co/storage/v1/object/public/<bucket>/<path>
+      // The previous implementation used a regex literal with ${STORAGE_BUCKET}
+      // interpolation, which doesn't interpolate inside a `/regex/` literal —
+      // it matched the string "${STORAGE_BUCKET}", so every delete silently
+      // failed with "Invalid video URL" and storage files were orphaned.
+      const marker = `/storage/v1/object/public/${STORAGE_BUCKET}/`;
+      const markerIdx = videoUrl.indexOf(marker);
+      if (markerIdx === -1) {
+        console.warn(`[storage] deleteVideo: URL does not look like a ${STORAGE_BUCKET} object:`, videoUrl);
+        return;
+      }
 
-      const filePath = pathMatch[1];
+      const filePath = videoUrl.slice(markerIdx + marker.length).split('?')[0];
+      if (!filePath) {
+        console.warn('[storage] deleteVideo: empty path after bucket marker:', videoUrl);
+        return;
+      }
+
       const { error } = await supabase.storage
         .from(STORAGE_BUCKET)
         .remove([filePath]);
