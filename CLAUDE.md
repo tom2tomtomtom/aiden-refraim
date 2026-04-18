@@ -48,13 +48,15 @@ refrAIm is the quiet efficient post assistant who cuts what you need without ask
 
 **Billing is standalone Stripe, NOT deducted from Gateway token balance** — by design for now, may change later.
 
-Partial work: commit b03620e "Add Gateway SSO bootstrap for .aiden.services domain" (~2 months old) landed some scaffolding but the client still routes to Supabase. **[TODO: confirm with Tom whether full Gateway migration is planned.]**
+Partial work: commit b03620e "Add Gateway SSO bootstrap for .aiden.services domain" (~2 months old) landed some scaffolding but the client still routes to Supabase. Full Gateway SSO migration is deferred — refrAIm stays on standalone Supabase auth + standalone Stripe billing for now.
 
 ## 7. Token billing
 
-[TODO: verify] `refraim.video_export = 2` exists in Gateway's TOKEN_COSTS. The server (`server/src/lib/gateway-tokens.ts`) does call `checkTokens()` + `deductTokens()` from `videoController.ts`, BUT requires `AIDEN_SERVICE_KEY` to be set.
+`refraim.video_export = 2` is registered in Gateway's `TOKEN_COSTS` (confirmed against `aiden-gateway/lib/tokens.ts`). The server (`server/src/lib/gateway-tokens.ts`) calls `checkTokens()` + `deductTokens()` from `videoController.ts` when `AIDEN_SERVICE_KEY` is set.
 
-**Gotcha:** if `AIDEN_SERVICE_KEY` is missing, deduction silently succeeds (`{ success: true, remaining: 0 }`). This is a soft dependency: refrAIm works without it but tokens aren't deducted. **Clarify with Tom whether refrAIm should be billed via Gateway tokens or remain on standalone Stripe.**
+**Current billing model:** refrAIm runs on standalone Stripe (free / starter $29 / pro $79 / agency $199). Gateway token deductions are an optional hook — they fire when `AIDEN_SERVICE_KEY` is set, but are not the primary billing path.
+
+**Gotcha:** if `AIDEN_SERVICE_KEY` is missing, `deductTokens()` silently returns `{ success: true, remaining: 0 }` without actually deducting. In the current standalone-Stripe model this is fine, but if refrAIm is migrated to Gateway-primary billing, this fallback must be changed to fail-closed.
 
 ## 8. Critical files
 
@@ -91,7 +93,7 @@ Partial work: commit b03620e "Add Gateway SSO bootstrap for .aiden.services doma
 - `STRIPE_PRICE_ID_STARTER`, `STRIPE_PRICE_ID_PRO`, `STRIPE_PRICE_ID_AGENCY`
 - `STRIPE_WEBHOOK_SECRET`
 - `ANTHROPIC_API_KEY` — AI editor
-- `AIDEN_SERVICE_KEY` — [TODO: verify] for Gateway token deductions
+- `AIDEN_SERVICE_KEY` — optional; enables Gateway token deductions alongside Stripe (see §7)
 - `GATEWAY_URL` — default `https://www.aiden.services`
 - `CLIENT_URL` — used for Stripe checkout redirects
 - `SENTRY_DSN`
@@ -113,7 +115,7 @@ Partial work: commit b03620e "Add Gateway SSO bootstrap for .aiden.services doma
 - Build: `npm run build` (tsc -b + vite build from `/client`)
 - API reverse proxy: `/_netlify/functions/api` → `https://refraim.railway.app/api` (check `netlify.toml` or Netlify Functions UI)
 
-**[TODO: verify Netlify to Railway routing.]** If proxy breaks, exports fail silently.
+**Netlify → Railway proxy:** configured via `netlify.toml` redirect `/_netlify/functions/api/* → https://refraim.railway.app/api/:splat`. If this breaks, exports fail silently on the client with no network error — check `netlify.toml` first.
 
 ## 11. Known gotchas + incidents
 
