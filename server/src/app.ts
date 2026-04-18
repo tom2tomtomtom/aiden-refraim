@@ -105,9 +105,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check (no auth required)
+// Minimal public health endpoint. Consumed by Railway healthcheck + any
+// uptime monitor. Intentionally does NOT return timestamp, version, or
+// git SHA — those enable fingerprinting with no operational benefit.
 app.get('/api/health', (_req, res) => {
-  res.status(200).json({ status: 'ok', timestamp: Date.now() });
+  res.status(200).json({ ok: true });
 });
 
 // Rate limiting
