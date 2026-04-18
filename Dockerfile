@@ -28,8 +28,9 @@ RUN npm install @rollup/rollup-linux-x64-gnu
 # Build client (uses ARGs above via Vite's import.meta.env)
 RUN cd client && npx vite build
 
-# Build server (clean dist first, ignore TS errors)
-RUN rm -rf server/dist && cd server && npx tsc || true
+# Build server. TS errors are no longer masked — the server type-checks
+# cleanly and we want future regressions to fail the build, not ship.
+RUN rm -rf server/dist && cd server && npx tsc
 RUN cp server/src/config/schema.sql server/dist/config/schema.sql 2>/dev/null || true
 
 EXPOSE 3000
