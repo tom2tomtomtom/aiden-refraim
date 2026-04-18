@@ -78,7 +78,6 @@ describe('requireAuth middleware', () => {
     expect((res.status as jest.Mock)).toHaveBeenCalledWith(401);
     expect((res.json as jest.Mock)).toHaveBeenCalledWith({
       error: 'Invalid JWT',
-      details: 'Token expired',
     });
     expect(next).not.toHaveBeenCalled();
   });

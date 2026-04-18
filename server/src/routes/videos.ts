@@ -80,7 +80,7 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     return res.json(videosWithJobs);
   } catch (error) {
     console.error('Error fetching videos:', error);
-    return res.status(500).json({ error: 'Failed to fetch videos', details: error instanceof Error ? error.message : String(error) });
+    return res.status(500).json({ error: 'Failed to fetch videos' });
   }
 });
 

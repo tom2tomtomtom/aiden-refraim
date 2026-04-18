@@ -28,10 +28,7 @@ export const requireAuth = async (
 
     if (userError) {
       console.error('Failed to get user from JWT:', userError.message);
-      return res.status(401).json({
-        error: 'Invalid JWT',
-        details: userError.message
-      });
+      return res.status(401).json({ error: 'Invalid JWT' });
     }
 
     if (!user) {

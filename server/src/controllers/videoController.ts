@@ -118,24 +118,18 @@ export const uploadVideo = async (req: Request, res: Response) => {
       user: (req as any).user,
     });
 
+    // Don't leak storage / database error strings. Supabase errors include
+    // bucket names, table names, and sometimes RLS policy hints; raw
+    // filesystem/ffmpeg errors include local paths.
     if (error instanceof Error) {
       if (error.message.includes('storage')) {
-        return res.status(500).json({
-          error: 'Storage error',
-          details: error.message,
-        });
+        return res.status(500).json({ error: 'Storage error' });
       } else if (error.message.includes('database')) {
-        return res.status(500).json({
-          error: 'Database error',
-          details: error.message,
-        });
+        return res.status(500).json({ error: 'Database error' });
       }
     }
 
-    res.status(500).json({
-      error: 'Error uploading video',
-      details: error instanceof Error ? error.message : 'Unknown error',
-    });
+    res.status(500).json({ error: 'Error uploading video' });
   }
 };
 

@@ -56,10 +56,12 @@ export const getAIFocusStrategy = async (req: Request, res: Response) => {
 
     return res.json(strategy);
   } catch (error) {
+    // Never echo err.message to the client — this endpoint calls into
+    // LLM SDKs whose error strings can contain upstream URLs, model
+    // names, and in rare cases fragments of the prompt or API key.
     console.error('Error in getAIFocusStrategy:', error);
     return res.status(500).json({
       error: 'Failed to generate AI focus strategy',
-      details: error instanceof Error ? error.message : 'Unknown error',
     });
   }
 };
@@ -91,10 +93,10 @@ export const reviewCropQuality = async (req: Request, res: Response) => {
     const reviews = await reviewCrops(cropInputs, targetPlatform);
     return res.json({ reviews });
   } catch (error) {
+    // Same LLM-SDK leak risk as above — swallow the message server-side.
     console.error('Error in reviewCropQuality:', error);
     return res.status(500).json({
       error: 'Failed to review crops',
-      details: error instanceof Error ? error.message : 'Unknown error',
     });
   }
 };

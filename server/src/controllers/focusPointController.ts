@@ -34,13 +34,13 @@ export async function listFocusPoints(req: Request, res: Response) {
 
     if (error) {
       console.error('Error fetching focus points:', error);
-      return res.status(500).json({ error: 'Failed to fetch focus points', details: error.message });
+      return res.status(500).json({ error: 'Failed to fetch focus points' });
     }
 
     return res.json(data || []);
   } catch (error) {
     console.error('Error in listFocusPoints:', error);
-    return res.status(500).json({ error: 'Failed to fetch focus points', details: error instanceof Error ? error.message : String(error) });
+    return res.status(500).json({ error: 'Failed to fetch focus points' });
   }
 }
 
@@ -122,13 +122,13 @@ export async function createFocusPoints(req: Request, res: Response) {
 
     if (error) {
       console.error('Error creating focus points:', error);
-      return res.status(500).json({ error: 'Failed to create focus points', details: error.message });
+      return res.status(500).json({ error: 'Failed to create focus points' });
     }
 
     return res.status(201).json(data);
   } catch (error) {
     console.error('Error in createFocusPoints:', error);
-    return res.status(500).json({ error: 'Failed to create focus points', details: error instanceof Error ? error.message : String(error) });
+    return res.status(500).json({ error: 'Failed to create focus points' });
   }
 }
 
@@ -201,13 +201,13 @@ export async function updateFocusPoint(req: Request, res: Response) {
       if (error.code === 'PGRST116') {
         return res.status(404).json({ error: 'Focus point not found' });
       }
-      return res.status(500).json({ error: 'Failed to update focus point', details: error.message });
+      return res.status(500).json({ error: 'Failed to update focus point' });
     }
 
     return res.json(data);
   } catch (error) {
     console.error('Error in updateFocusPoint:', error);
-    return res.status(500).json({ error: 'Failed to update focus point', details: error instanceof Error ? error.message : String(error) });
+    return res.status(500).json({ error: 'Failed to update focus point' });
   }
 }
 
@@ -233,13 +233,13 @@ export async function deleteFocusPoint(req: Request, res: Response) {
       if (error.code === 'PGRST116') {
         return res.status(404).json({ error: 'Focus point not found' });
       }
-      return res.status(500).json({ error: 'Failed to delete focus point', details: error.message });
+      return res.status(500).json({ error: 'Failed to delete focus point' });
     }
 
     return res.status(200).json({ message: 'Focus point deleted', id: data.id });
   } catch (error) {
     console.error('Error in deleteFocusPoint:', error);
-    return res.status(500).json({ error: 'Failed to delete focus point', details: error instanceof Error ? error.message : String(error) });
+    return res.status(500).json({ error: 'Failed to delete focus point' });
   }
 }
 
@@ -260,12 +260,12 @@ export async function deleteAllFocusPoints(req: Request, res: Response) {
 
     if (error) {
       console.error('Error deleting all focus points:', error);
-      return res.status(500).json({ error: 'Failed to delete focus points', details: error.message });
+      return res.status(500).json({ error: 'Failed to delete focus points' });
     }
 
     return res.status(200).json({ message: 'All focus points deleted', count: data?.length ?? 0 });
   } catch (error) {
     console.error('Error in deleteAllFocusPoints:', error);
-    return res.status(500).json({ error: 'Failed to delete focus points', details: error instanceof Error ? error.message : String(error) });
+    return res.status(500).json({ error: 'Failed to delete focus points' });
   }
 }
