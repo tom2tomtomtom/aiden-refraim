@@ -298,8 +298,9 @@ export const deleteVideo = async (req: Request, res: Response) => {
     // Delete from storage
     await StorageService.deleteVideo(video.original_url);
     if (video.platform_outputs) {
-      for (const platform of Object.values(video.platform_outputs)) {
-        if (platform.url) {
+      const outputs = Object.values(video.platform_outputs) as Array<{ url?: string }>;
+      for (const platform of outputs) {
+        if (platform?.url) {
           await StorageService.deleteVideo(platform.url);
         }
       }

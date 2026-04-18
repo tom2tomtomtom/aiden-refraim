@@ -10,16 +10,24 @@ interface Video {
   id: string;
   user_id: string;
   original_url: string;
-  processed_url?: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  error?: string;
+  processed_url?: string | null;
+  // Accept both the older lowercase lifecycle strings used inside this
+  // service and the canonical uppercase ones stored in Supabase so the
+  // controller can hand us a canonical Video row without a cast.
+  status:
+    | 'pending' | 'processing' | 'completed' | 'failed'
+    | 'UPLOADED' | 'PROCESSING' | 'COMPLETE' | 'ERROR';
+  error?: string | null;
   platforms: string[];
-  processing_metadata?: VideoAnalysis;
+  // DB column is JSONB. Different code paths project it into different
+  // shapes (`VideoAnalysis` locally, `ProcessingMetadata` in types/database).
+  // Keep the field permissive and narrow at the read site.
+  processing_metadata?: VideoAnalysis | object;
   platform_outputs?: Record<string, {
     url: string;
     format: string;
-    width: number;
-    height: number;
+    width?: number;
+    height?: number;
     status: 'complete' | 'error';
     error?: string;
   }>;

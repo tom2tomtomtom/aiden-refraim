@@ -10,6 +10,10 @@ export interface Video {
   description: string | null;
   created_at: string;
   updated_at: string;
+  // Populated by the processing pipeline. Stored as JSONB in Supabase,
+  // so they're optional on the TS side — older rows may predate them.
+  platform_outputs?: PlatformOutputs;
+  processing_metadata?: ProcessingMetadata;
 }
 
 export interface ProcessingJob {
