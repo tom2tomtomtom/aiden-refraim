@@ -66,34 +66,21 @@ export class InitializationService {
         console.warn('UUID extension might already be enabled:', extensionError);
       }
 
-      // Check if videos table exists
+      // Check if videos table exists. If it doesn't, bail with a clear
+      // error — we used to execute server/src/config/schema.sql here via
+      // supabase.query(), but supabase-js has no .query() method and
+      // this branch has been dead since the client was swapped in.
+      // Schema is managed by Supabase migrations in production; for
+      // local dev, run the migrations manually.
       const { error: existsError } = await supabase
         .from('videos')
         .select('id')
         .limit(1);
 
       if (existsError?.message?.includes('relation "videos" does not exist')) {
-        // Create videos table using schema.sql
-        const schemaPath = path.join(__dirname, '../config/schema.sql');
-        const schemaSql = fs.readFileSync(schemaPath, 'utf8');
-        
-        const { error: createError } = await supabase.query(schemaSql);
-
-        // Add RLS policies
-        const { error: rlsError } = await supabase.query(`
-          ALTER TABLE videos ENABLE ROW LEVEL SECURITY;
-
-          CREATE POLICY "Users can only access their own videos"
-            ON videos
-            FOR ALL
-            USING (auth.uid() = user_id);
-        `);
-
-        if (createError) {
-          throw createError;
-        }
-
-        console.log('Videos table created successfully');
+        throw new Error(
+          'videos table missing — run supabase migrations (supabase/migrations/*.sql) against the target project'
+        );
       } else {
         console.log('Videos table already exists');
       }

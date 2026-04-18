@@ -1,4 +1,5 @@
 import express from 'express';
+import * as Sentry from '@sentry/node';
 import cors from 'cors';
 import morgan from 'morgan';
 import path from 'path';
@@ -113,6 +114,10 @@ app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api')) return next();
   res.sendFile(path.join(clientDistPath, 'index.html'));
 });
+
+// Sentry must see errors before our own handler swallows them. It's a
+// no-op if Sentry.init was never called (missing DSN).
+Sentry.setupExpressErrorHandler(app);
 
 // Error handling with detailed logging
 app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {

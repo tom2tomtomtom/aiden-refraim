@@ -9,16 +9,18 @@ const router = Router();
 router.post(
   '/stripe',
   express.raw({ type: 'application/json' }),
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<void> => {
     if (!stripe) {
-      return res.status(503).json({ error: 'Billing not configured' });
+      res.status(503).json({ error: 'Billing not configured' });
+      return;
     }
 
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
     if (!sig || !webhookSecret) {
-      return res.status(400).json({ error: 'Missing signature or webhook secret' });
+      res.status(400).json({ error: 'Missing signature or webhook secret' });
+      return;
     }
 
     let event;
@@ -26,7 +28,8 @@ router.post(
       event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
     } catch (err) {
       console.error('Webhook signature verification failed:', err);
-      return res.status(400).json({ error: 'Invalid signature' });
+      res.status(400).json({ error: 'Invalid signature' });
+      return;
     }
 
     try {
@@ -88,10 +91,12 @@ router.post(
         }
       }
 
-      return res.json({ received: true });
+      res.json({ received: true });
+      return;
     } catch (error) {
       console.error('Webhook handler error:', error);
-      return res.status(500).json({ error: 'Webhook handler failed' });
+      res.status(500).json({ error: 'Webhook handler failed' });
+      return;
     }
   }
 );

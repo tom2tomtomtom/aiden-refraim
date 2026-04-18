@@ -1,6 +1,7 @@
-// Load environment variables first
-import { config } from 'dotenv';
-config();
+// IMPORTANT: ./instrument must be first — Sentry 10 / OpenTelemetry
+// instruments Express and HTTP at require time, so it must run before
+// those modules are loaded. It also loads dotenv on our behalf.
+import './instrument';
 
 // Then import the rest
 import app from './app';

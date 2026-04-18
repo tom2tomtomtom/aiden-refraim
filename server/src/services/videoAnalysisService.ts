@@ -104,7 +104,7 @@ const detectScenes = async (videoPath: string): Promise<SceneData[]> => {
         const output = data.toString();
         const matches = output.match(/scene:(\d+\.\d+)/g);
         if (matches) {
-          matches.forEach((match) => {
+          matches.forEach((match: string) => {
             const score = parseFloat(match.split(':')[1]);
             scenes.push({
               timestamp: currentTime,
@@ -155,7 +155,7 @@ const analyzeMotion = async (videoPath: string): Promise<MotionData[]> => {
       const output = data.toString();
       const matches = output.match(/motion_est=(\S+)/g);
       if (matches) {
-        matches.forEach((match) => {
+        matches.forEach((match: string) => {
           const [x, y, mag] = match.split(':')[1].split(',').map(Number);
           motionData.push({
             timestamp: currentTime,
