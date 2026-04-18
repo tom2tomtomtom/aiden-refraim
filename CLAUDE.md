@@ -17,10 +17,10 @@ refrAIm is the quiet efficient post assistant who cuts what you need without ask
 ## 4. Where it lives
 
 - Domain: `refraim.aiden.services`
-- Repo: `tom2tomtomtom/refraim`
-- Local: `/Users/tommyhyde/refraim`
+- Repo: `tom2tomtomtom/aiden-refraim`
+- Local: `/Users/tommyhyde/aiden-refraim`
 - Split: Express server (Node + FFmpeg) on Railway; React client (Vite + Supabase) on Netlify
-- **Deploy server**: `railway up --detach` from `/Users/tommyhyde/refraim/`. **This is one of the few apps where `railway up` is correct.** Other hub apps use `git push`.
+- **Deploy server**: `railway up --detach` from `/Users/tommyhyde/aiden-refraim/`. **This is one of the few apps where `railway up` is correct.** Other hub apps use `git push`.
 - **Deploy client**: Netlify auto-deploys on git push.
 
 ## 5. Tech stack
@@ -106,7 +106,7 @@ Partial work: commit b03620e "Add Gateway SSO bootstrap for .aiden.services doma
 **Server:** Railway
 - Config: `railway.json` (builder: DOCKERFILE, healthcheckPath: `/api/health`)
 - Dockerfile installs ffmpeg, builds client (Vite), builds server (tsc), runs `node server/dist/server.js`
-- Deploy: `cd /Users/tommyhyde/refraim && railway up --detach`
+- Deploy: `cd /Users/tommyhyde/aiden-refraim && railway up --detach`
 
 **Client:** Netlify
 - Auto-deploy on push to `main`
