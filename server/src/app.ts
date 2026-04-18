@@ -33,6 +33,24 @@ const authLimiter = rateLimit({
 // Middleware
 app.use(morgan('dev'));
 
+// Baseline security headers applied to every response (including the
+// Vite-built client bundle served below). Conservative set — CSP is
+// deferred pending a dedicated allowlist pass.
+app.use((_req, res, next) => {
+  res.setHeader(
+    'Strict-Transport-Security',
+    'max-age=63072000; includeSubDomains; preload',
+  );
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader(
+    'Permissions-Policy',
+    'camera=(), microphone=(), geolocation=(), interest-cohort=()',
+  );
+  next();
+});
+
 // CORS configuration
 app.use(cors({
   origin: [
