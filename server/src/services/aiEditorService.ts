@@ -111,7 +111,7 @@ export async function generateFocusStrategy(
     const response = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 3000,
         messages: [{ role: 'user', content: prompt }],
       },
@@ -125,8 +125,12 @@ export async function generateFocusStrategy(
       }
     );
 
-    const text = response.data.content[0]?.text || '';
+    const text = (response.data.content ?? [])
+      .filter((b: any) => b?.type === 'text')
+      .map((b: any) => b.text)
+      .join('') || '';
 
+    // TODO: harden if model upgrades surface multi-object output
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return generateRuleBasedStrategy(subjects, videoDuration, targetPlatform);
@@ -182,7 +186,7 @@ async function analyzeScenes(
   const response = await axios.post(
     'https://api.anthropic.com/v1/messages',
     {
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-6',
       max_tokens: 1500,
       messages: [{
         role: 'user',
@@ -208,7 +212,11 @@ Respond with ONLY valid JSON:
     }
   );
 
-  const text = response.data.content[0]?.text || '';
+  const text = (response.data.content ?? [])
+    .filter((b: any) => b?.type === 'text')
+    .map((b: any) => b.text)
+    .join('') || '';
+  // TODO: harden if model upgrades surface multi-object output
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return [];
 
@@ -465,7 +473,7 @@ export async function reviewCrops(
     const response = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 2000,
         messages: [{
           role: 'user',
@@ -522,7 +530,11 @@ Respond with ONLY valid JSON:
       }
     );
 
-    const text = response.data.content[0]?.text || '';
+    const text = (response.data.content ?? [])
+      .filter((b: any) => b?.type === 'text')
+      .map((b: any) => b.text)
+      .join('') || '';
+    // TODO: harden if model upgrades surface multi-object output
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return crops.map(c => ({ time: c.time, quality: 'good' as const, issues: [], suggestion: '' }));
