@@ -6,6 +6,11 @@ import './instrument';
 // Then import the rest
 import app from './app';
 import { InitializationService } from './services/initializationService';
+import { validateSupabaseEnvOrExit } from './lib/supabase-env';
+
+// Fail loud at startup if SUPABASE_URL is missing or points at the wrong
+// project. Must run before any Supabase client is constructed.
+validateSupabaseEnvOrExit();
 
 const port = process.env.PORT || 3000;
 

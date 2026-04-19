@@ -1,19 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
+import { getValidatedSupabaseConfig } from '../lib/supabase-env';
 
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.SUPABASE_ANON_KEY) {
-  throw new Error('Missing Supabase environment variables');
-}
+const { url, serviceRoleKey, anonKey } = getValidatedSupabaseConfig();
 
 console.log('Initializing Supabase clients:', {
-  url: process.env.SUPABASE_URL,
-  hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-  hasAnonKey: !!process.env.SUPABASE_ANON_KEY
+  url,
+  hasServiceKey: !!serviceRoleKey,
+  hasAnonKey: !!anonKey
 });
 
 // Create auth client for JWT validation
 export const authClient = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_ANON_KEY!,
+  url,
+  anonKey,
   {
     auth: {
       autoRefreshToken: false,
@@ -28,8 +27,8 @@ export const authClient = createClient(
 
 // Create admin client for server-side operations
 export const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  url,
+  serviceRoleKey,
   {
     auth: {
       autoRefreshToken: false,
