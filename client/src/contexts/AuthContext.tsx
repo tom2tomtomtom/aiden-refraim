@@ -30,12 +30,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
         if (!res.ok) return false;
         const data = await res.json();
-        if (data.access_token && data.refresh_token) {
-          const { error } = await supabase.auth.setSession({
-            access_token: data.access_token,
-            refresh_token: data.refresh_token,
-          });
-          return !error;
+        // Gateway returns { jwt, user, cookies }. The cookies are Set-Cookie'd
+        // on .aiden.services by the fetch (credentials: 'include' + CORS
+        // allow-credentials on the Gateway response), so Supabase's cookie
+        // store should now have a session. The previous code looked for
+        // data.access_token / data.refresh_token which Gateway never
+        // returned, so SSO silently failed and we always fell through to
+        // the local login wall.
+        if (data.jwt && data.user) {
+          const { data: sessionData } = await supabase.auth.getSession();
+          return !!sessionData.session;
         }
         return false;
       } catch {
