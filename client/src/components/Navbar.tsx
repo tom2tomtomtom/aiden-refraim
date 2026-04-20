@@ -58,8 +58,8 @@ export function Navbar() {
     <nav className="bg-black-deep border-b-2 border-red-hot px-4 py-3">
       <div className="max-w-7xl mx-auto flex justify-between items-center">
         <div className="flex items-center gap-8">
-          <Link to="/" className="text-red-hot text-xl font-bold uppercase tracking-tight shrink-0">
-            REFRAIM
+          <Link to="/" className="text-red-hot text-xl font-bold tracking-tight shrink-0">
+            refrAIm
           </Link>
           <div className="hidden md:flex items-center gap-6">
             {navLinks}
