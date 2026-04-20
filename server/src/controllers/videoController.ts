@@ -177,9 +177,62 @@ export const getVideoStatus = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
+    // The client polls this endpoint during export and expects
+    // `{ status, progress, platforms: { [platform]: { status, progress, url, error } } }`.
+    // Previously we returned only `{ status, platformOutputs }`, so the
+    // client's `status.platforms || {}` lookup was always empty — per-
+    // platform progress bars never rendered, the aggregate `overallProgress`
+    // stayed at 0, and the final Download button never appeared. The
+    // raw `processing_jobs.progress` row (updated at 30 → 90 → 100 by
+    // videoProcessingService) is the source of truth for the aggregate.
+
+    const { data: job } = await supabase
+      .from('processing_jobs')
+      .select('progress, status')
+      .eq('video_id', id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const platformOutputs = video.platform_outputs || {};
+    // Video.status is declared as uppercase in types/database.ts but the
+    // service writes lowercase ('completed'/'failed') post-processing.
+    // Widen to string to accept both historic and current values.
+    const videoStatus = String(video.status).toLowerCase();
+    const aggregateProgress =
+      videoStatus === 'completed' || videoStatus === 'failed'
+        ? 100
+        : (job?.progress ?? 0);
+
+    // Mirror each platform output under the `platforms` key the client
+    // expects. For completed platforms, surface both the original url
+    // and a `progress: 100` so the UI's % reduce math lines up.
+    const platforms: Record<string, {
+      status: string;
+      progress: number;
+      url?: string;
+      error?: string;
+    }> = {};
+    for (const [platform, raw] of Object.entries(platformOutputs as Record<string, {
+      status?: string;
+      url?: string;
+      error?: string;
+    }>)) {
+      const done = raw?.status === 'complete';
+      const errored = raw?.status === 'error';
+      platforms[platform] = {
+        status: raw?.status ?? 'processing',
+        progress: done || errored ? 100 : aggregateProgress,
+        url: raw?.url,
+        error: raw?.error,
+      };
+    }
+
     res.json({
       status: video.status,
-      platformOutputs: video.platform_outputs
+      progress: aggregateProgress,
+      platforms,
+      platformOutputs, // kept for any external callers on the old shape
     });
   } catch (error) {
     console.error('Error in getVideoStatus:', error);

@@ -171,6 +171,7 @@ class BasicVideoProcessor implements VideoProcessor {
           completedPlatforms++;
           // Update progress (30-90% based on platform completion)
           const progress = 30 + Math.floor((completedPlatforms / platformCount) * 60);
+          await this.updateVideoStatus(video.id, 'processing', undefined, progress);
         } catch (error) {
           // Log the raw error (with ffmpeg stderr) server-side only.
           // Return a generic, stable message + opaque error id to the
@@ -186,6 +187,7 @@ class BasicVideoProcessor implements VideoProcessor {
           completedPlatforms++;
           // Update progress even for failed platforms
           const progress = 30 + Math.floor((completedPlatforms / platformCount) * 60);
+          await this.updateVideoStatus(video.id, 'processing', undefined, progress);
         }
       }
 
@@ -205,17 +207,21 @@ class BasicVideoProcessor implements VideoProcessor {
 
       if (updateError3) throw updateError3;
 
-      // Set final progress to 100% for completed videos
-      if (!Object.values(platformOutputs).some(output => output.status === 'error')) {
-        await this.updateVideoStatus(video.id, 'completed', undefined, 100);
-      }
-
+      // Always jump to 100% at the end — 'failed' is a terminal state
+      // too and the client uses progress=100 + status to unblock its
+      // polling loop. Previously on any per-platform error we left the
+      // row at 90% forever (user-visible "stuck at 90%").
+      const finalStatus = Object.values(platformOutputs).some(output => output.status === 'error')
+        ? 'failed'
+        : 'completed';
+      await this.updateVideoStatus(video.id, finalStatus, undefined, 100);
     } catch (error) {
       console.error('Video processing failed:', error);
       await this.updateVideoStatus(
         video.id,
         'failed',
-        error instanceof Error ? error.message : 'Unknown error'
+        error instanceof Error ? error.message : 'Unknown error',
+        100
       );
       throw error;
     }
@@ -395,15 +401,19 @@ class BasicVideoProcessor implements VideoProcessor {
 
       if (updateError3) throw updateError3;
 
-      if (!Object.values(platformOutputs).some(output => output.status === 'error')) {
-        await this.updateVideoStatus(video.id, 'completed', undefined, 100);
-      }
+      // Always terminate at 100 — 'failed' is terminal too. See process()
+      // for the fuller explanation. Previously stuck at 90 on any error.
+      const finalStatus = Object.values(platformOutputs).some(output => output.status === 'error')
+        ? 'failed'
+        : 'completed';
+      await this.updateVideoStatus(video.id, finalStatus, undefined, 100);
     } catch (error) {
       console.error('Video processing with focus points failed:', error);
       await this.updateVideoStatus(
         video.id,
         'failed',
-        error instanceof Error ? error.message : 'Unknown error'
+        error instanceof Error ? error.message : 'Unknown error',
+        100
       );
       throw error;
     }
