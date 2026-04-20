@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { stripe, PLANS } from '../config/stripe';
 import { supabase } from '../config/supabase';
+import { getQuotaState } from '../lib/quota';
 
 const router = Router();
 
@@ -9,26 +10,22 @@ const router = Router();
 router.get('/plan', requireAuth as any, async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id;
+    const quota = await getQuotaState(userId);
 
-    const { data: user } = await supabase
+    const { data: billing } = await supabase
       .from('user_billing')
-      .select('*')
+      .select('stripe_customer_id, subscription_status')
       .eq('user_id', userId)
-      .single();
-
-    if (!user) {
-      return res.json({ plan: 'free', exports_this_month: 0, exports_limit: PLANS.free.exportsPerMonth });
-    }
-
-    const plan = Object.entries(PLANS).find(([, p]) => p.priceId === user.stripe_price_id)?.[0] || 'free';
-    const planConfig = PLANS[plan as keyof typeof PLANS] || PLANS.free;
+      .maybeSingle();
 
     return res.json({
-      plan,
-      exports_this_month: user.exports_this_month || 0,
-      exports_limit: planConfig.exportsPerMonth,
-      stripe_customer_id: user.stripe_customer_id,
-      subscription_status: user.subscription_status,
+      plan: quota.plan,
+      exports_this_month: quota.used,
+      exports_limit: quota.limit,
+      exports_remaining: Number.isFinite(quota.remaining) ? quota.remaining : null,
+      exports_resets_at: quota.resetsAt,
+      stripe_customer_id: billing?.stripe_customer_id || null,
+      subscription_status: billing?.subscription_status || 'inactive',
     });
   } catch (error) {
     console.error('Error getting plan:', error);

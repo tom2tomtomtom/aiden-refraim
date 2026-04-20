@@ -116,14 +116,18 @@ describe('webhook routes', () => {
 
     expect(mockSubscriptionsRetrieve).toHaveBeenCalledWith('sub_456');
     expect(mockFrom).toHaveBeenCalledWith('user_billing');
-    expect(mockUpsert).toHaveBeenCalledWith({
+    expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({
       user_id: 'user-abc',
       stripe_customer_id: 'cus_123',
       stripe_subscription_id: 'sub_456',
       stripe_price_id: 'price_pro',
       subscription_status: 'active',
       plan: 'pro',
-    });
+      exports_this_month: 0,
+      // exports_reset_at is an ISO timestamp generated at upsert time;
+      // assert it's present without pinning the exact millisecond.
+      exports_reset_at: expect.any(String),
+    }));
   });
 
   it('handles customer.subscription.deleted event', async () => {

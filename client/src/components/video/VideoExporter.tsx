@@ -4,27 +4,49 @@ import { useFocusPoints } from '../../contexts/FocusPointsContext';
 import { useApi } from '../../contexts/ApiContext';
 import { OUTPUT_FORMATS, ExportQuality } from '../../types/video';
 
+interface PlanState {
+  plan: string;
+  exports_this_month: number;
+  exports_limit: number; // -1 = unlimited
+  exports_remaining: number | null; // null = unlimited
+}
+
 export default function VideoExporter() {
   const { videoId } = useVideo();
   const { focusPoints } = useFocusPoints();
   const { api } = useApi();
 
-  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(Object.keys(OUTPUT_FORMATS));
+  // Default to a single platform (Instagram Story / TikTok 9:16) rather
+  // than all 8 selected. On the free tier, defaulting to all 8 would let
+  // the user exhaust the monthly export quota in a single click.
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['instagram-story']);
   const [useLetterboxing, setUseLetterboxing] = useState(false);
   const [quality, setQuality] = useState<ExportQuality>('medium');
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<Record<string, { status: string; progress: number; url?: string; error?: string }>>({});
   const [error, setError] = useState<string | null>(null);
+  const [plan, setPlan] = useState<PlanState | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const refreshPlan = useCallback(async () => {
+    if (!api) return;
+    try {
+      const p = await api.getCurrentPlan() as unknown as PlanState;
+      setPlan(p);
+    } catch {
+      // Non-fatal: counter just doesn't render. Server-side gate still enforces.
+    }
+  }, [api]);
+
   useEffect(() => {
+    refreshPlan();
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = null;
       }
     };
-  }, []);
+  }, [refreshPlan]);
 
   const togglePlatform = (platform: string) => {
     setSelectedPlatforms(prev =>
@@ -63,6 +85,7 @@ export default function VideoExporter() {
               pollIntervalRef.current = null;
             }
             setIsExporting(false);
+            refreshPlan();
           }
         } catch {
           if (pollIntervalRef.current) {
@@ -76,8 +99,12 @@ export default function VideoExporter() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Export failed');
       setIsExporting(false);
+      // Even on a 402 the server may have rolled back the reservation, or
+      // may have charged it — refresh either way so the banner reflects
+      // the real remaining quota.
+      refreshPlan();
     }
-  }, [api, videoId, selectedPlatforms, useLetterboxing, quality]);
+  }, [api, videoId, selectedPlatforms, useLetterboxing, quality, refreshPlan]);
 
   const handleDownload = useCallback(async (platform: string) => {
     if (!api || !videoId) return;
@@ -93,9 +120,32 @@ export default function VideoExporter() {
     ? Math.round(Object.values(exportProgress).reduce((sum, p) => sum + (p.progress || 0), 0) / Object.values(exportProgress).length)
     : 0;
 
+  const quotaExhausted = plan != null && plan.exports_limit !== -1 && plan.exports_remaining !== null && plan.exports_remaining <= 0;
+
   return (
     <div className="bg-black-card p-6 border-2 border-border-subtle">
       <h2 className="text-xl font-bold text-red-hot uppercase mb-4">Export Options</h2>
+
+      {plan && (
+        <div className={`mb-4 p-3 border-2 ${quotaExhausted ? 'border-red-hot bg-black-deep' : 'border-border-subtle bg-black-deep'}`}>
+          <p className="text-xs font-bold uppercase tracking-wide text-white-muted">
+            Plan: <span className="text-orange-accent">{plan.plan}</span>
+          </p>
+          {plan.exports_limit === -1 ? (
+            <p className="text-xs text-white-dim mt-1">Unlimited exports this month.</p>
+          ) : (
+            <p className="text-xs text-white-dim mt-1">
+              <span className={quotaExhausted ? 'text-red-hot font-bold' : 'text-white-full font-bold'}>
+                {plan.exports_remaining ?? Math.max(0, plan.exports_limit - plan.exports_this_month)}
+              </span>{' '}
+              of {plan.exports_limit} exports left this month
+              {quotaExhausted && (
+                <span className="text-red-hot"> — upgrade to export more.</span>
+              )}
+            </p>
+          )}
+        </div>
+      )}
 
       {error && (
         <div className="mb-4 p-3 bg-black-card border-2 border-red-hot">
@@ -233,10 +283,13 @@ export default function VideoExporter() {
       ) : (
         <button
           onClick={handleExport}
-          disabled={selectedPlatforms.length === 0}
+          disabled={selectedPlatforms.length === 0 || quotaExhausted}
           className="w-full bg-red-hot text-white px-6 py-3 text-sm font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          title={quotaExhausted ? 'Monthly export limit reached. Upgrade your plan to keep exporting.' : undefined}
         >
-          Export {selectedPlatforms.length} Platform{selectedPlatforms.length !== 1 ? 's' : ''}
+          {quotaExhausted
+            ? 'Upgrade to export more'
+            : `Export ${selectedPlatforms.length} Platform${selectedPlatforms.length !== 1 ? 's' : ''}`}
         </button>
       )}
     </div>

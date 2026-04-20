@@ -172,9 +172,15 @@ class BasicVideoProcessor implements VideoProcessor {
           // Update progress (30-90% based on platform completion)
           const progress = 30 + Math.floor((completedPlatforms / platformCount) * 60);
         } catch (error) {
-          console.error(`Error processing video for ${platform}:`, error);
+          // Log the raw error (with ffmpeg stderr) server-side only.
+          // Return a generic, stable message + opaque error id to the
+          // client so we don't leak container internals / file paths /
+          // the full ffmpeg build config to the browser.
+          const errorId = `err_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+          console.error(`[${errorId}] Error processing video for ${platform}:`, error);
           platformOutputs[platform] = {
-            error: error instanceof Error ? error.message : 'Processing failed',
+            error: `Processing failed for ${platform}. Please try again.`,
+            errorId,
             status: 'error',
           };
           completedPlatforms++;
@@ -359,9 +365,13 @@ class BasicVideoProcessor implements VideoProcessor {
           const progress = 30 + Math.floor((completedPlatforms / platformCount) * 60);
           await this.updateVideoStatus(video.id, 'processing', undefined, progress);
         } catch (error) {
-          console.error(`Error processing video for ${platform}:`, error);
+          // See process() for rationale — generic message to client, full
+          // raw error (including ffmpeg stderr) to server logs only.
+          const errorId = `err_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+          console.error(`[${errorId}] Error processing video with focus points for ${platform}:`, error);
           platformOutputs[platform] = {
-            error: error instanceof Error ? error.message : 'Processing failed',
+            error: `Processing failed for ${platform}. Please try again.`,
+            errorId,
             status: 'error',
           };
           completedPlatforms++;

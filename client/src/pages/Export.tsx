@@ -94,7 +94,7 @@ function ReframePreview({ ratioW, ratioH, label }: { ratioW: number; ratioH: num
 
 export default function ExportPage() {
   const { videoId: paramVideoId } = useParams<{ videoId: string }>();
-  const { loadVideo, videoUrl, isLoading, videoElementRef, isPlaying, setIsPlaying, setCurrentTime, duration } = useVideo();
+  const { loadVideo, videoUrl, isLoading, error: videoError, videoElementRef, isPlaying, setIsPlaying, setCurrentTime, duration } = useVideo();
   const { loadFocusPoints, focusPoints } = useFocusPoints();
   const [activeRatio, setActiveRatio] = useState(UNIQUE_RATIOS[0]);
   const mainVideoRef = useRef<HTMLVideoElement>(null);
@@ -105,6 +105,26 @@ export default function ExportPage() {
       loadFocusPoints(paramVideoId);
     }
   }, [paramVideoId, videoUrl, loadVideo, loadFocusPoints]);
+
+  // Match the editor's graceful error state for invalid / unknown /
+  // forbidden video ids, rather than silently rendering the export UI
+  // over a missing video (which then 500s on Export click).
+  if (videoError && !videoUrl) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 py-12">
+        <div className="bg-black-card border-2 border-red-hot p-8 text-center">
+          <p className="text-red-hot font-bold uppercase mb-2">Error Loading Video</p>
+          <p className="text-white-muted text-sm mb-6">{videoError}</p>
+          <Link
+            to="/"
+            className="inline-block bg-red-hot text-white px-6 py-3 text-sm font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all"
+          >
+            Back to Dashboard
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   // Hidden main video for context sync
   const videoRefCallback = useCallback((el: HTMLVideoElement | null) => {

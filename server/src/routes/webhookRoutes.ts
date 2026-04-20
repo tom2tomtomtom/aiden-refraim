@@ -48,6 +48,11 @@ router.post(
               stripe_price_id: priceId,
               subscription_status: 'active',
               plan: plan || 'starter',
+              // Upgrading / renewing a subscription resets the monthly
+              // export counter so the user doesn't carry over free-tier
+              // usage into their new plan's billing cycle.
+              exports_this_month: 0,
+              exports_reset_at: new Date().toISOString(),
             });
           }
           break;

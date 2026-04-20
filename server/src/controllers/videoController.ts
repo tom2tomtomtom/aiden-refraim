@@ -5,6 +5,7 @@ import { StorageService } from '../services/storageService';
 import { DatabaseService } from '../services/databaseService';
 import { supabase } from '../config/supabase';
 import { checkTokens, deductTokens } from '../lib/gateway-tokens';
+import { reserveExport, refundExport } from '../lib/quota';
 
 const VALID_PLATFORMS = [
   'instagram-story',
@@ -218,10 +219,28 @@ export const processVideo = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    // Gate on token balance before starting processing
+    // Gate on standalone Stripe plan quota. `reserveExport` returns the
+    // post-increment state on success or null when the monthly cap is
+    // hit. Unlimited plans (Pro / Agency) always succeed.
+    const reserved = await reserveExport(user.id);
+    if (!reserved) {
+      return res.status(402).json({
+        error: 'Monthly export limit reached',
+        message: 'You have used your free export allowance for this month. Upgrade your plan to keep exporting.',
+        upgradeUrl: '/#/billing',
+      });
+    }
+
+    // Gate on Gateway token balance (optional, only when AIDEN_SERVICE_KEY
+    // is wired). This is a secondary pool on top of the Stripe plan.
     if (process.env.AIDEN_SERVICE_KEY) {
       const tokenCheck = await checkTokens(user.id, 'refraim', 'video_export');
       if (!tokenCheck.allowed) {
+        // Quota was already reserved; refund it so the user doesn't burn a
+        // Stripe export allowance on a token-side failure.
+        await refundExport(user.id).catch((err) =>
+          console.error('[quota] Refund after token check failed:', err)
+        );
         return res.status(402).json({
           error: 'Insufficient tokens',
           required: tokenCheck.required,
@@ -238,7 +257,11 @@ export const processVideo = async (req: Request, res: Response) => {
       user_id: user.id
     });
 
-    // Start processing asynchronously; deduct tokens only on success
+    // Start processing asynchronously; deduct tokens only on success.
+    // We do NOT refund the Stripe plan quota on failure — the work was
+    // attempted and the FFmpeg cost was paid. If the failure is a hard
+    // infra error (quota-gate followed by a server crash), the user can
+    // retry within the month cap.
     processVideoForPlatforms(video, platforms)
       .then(() => {
         if (process.env.AIDEN_SERVICE_KEY) {
@@ -249,7 +272,14 @@ export const processVideo = async (req: Request, res: Response) => {
       })
       .catch(console.error);
 
-    res.json(processingJob);
+    res.json({
+      ...processingJob,
+      quota: {
+        used: reserved.used,
+        limit: reserved.limit,
+        remaining: Number.isFinite(reserved.remaining) ? reserved.remaining : null,
+      },
+    });
   } catch (error) {
     console.error('Error in processVideo:', error);
     res.status(500).json({ error: 'Error starting video processing' });
