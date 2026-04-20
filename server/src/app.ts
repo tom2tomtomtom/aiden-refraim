@@ -13,6 +13,7 @@ import scanRoutes from './routes/scanRoutes';
 import billingRoutes from './routes/billingRoutes';
 import webhookRoutes from './routes/webhookRoutes';
 import aiEditorRoutes from './routes/aiEditorRoutes';
+import meRoutes from './routes/meRoutes';
 
 const app = express();
 
@@ -117,6 +118,7 @@ app.use('/api', apiLimiter);
 app.use('/api/billing/checkout', authLimiter);
 
 // Routes
+app.use('/api/me', meRoutes);
 app.use('/api/test', testRoutes);
 app.use('/api/videos', videoRoutes);
 app.use('/api/admin', adminRoutes);

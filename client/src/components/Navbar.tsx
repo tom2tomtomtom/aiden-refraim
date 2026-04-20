@@ -4,14 +4,12 @@ import { useAuth } from '../contexts/AuthContext';
 import { Menu, X, LogOut } from 'lucide-react';
 
 export function Navbar() {
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
-  const handleLogout = () => {
-    window.location.href = 'https://www.aiden.services/auth/logout';
-  };
+  const handleLogout = () => signOut();
 
   const pathParts = location.pathname.split('/');
   const videoId = (pathParts[1] === 'editor' || pathParts[1] === 'export') ? pathParts[2] : null;
@@ -81,7 +79,7 @@ export function Navbar() {
               onClick={() => setShowLogoutConfirm(true)}
               className="bg-red-hot text-white px-4 py-2 text-xs font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all shrink-0"
             >
-              Logout
+              Sign Out
             </button>
           </div>
         )}
@@ -114,7 +112,7 @@ export function Navbar() {
                 onClick={() => { setShowLogoutConfirm(true); setMobileOpen(false); }}
                 className="bg-red-hot text-white px-4 py-2 text-xs font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all shrink-0"
               >
-                Logout
+                Sign Out
               </button>
             </div>
           )}

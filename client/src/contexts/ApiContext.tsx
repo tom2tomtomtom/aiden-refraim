@@ -9,13 +9,15 @@ interface ApiContextType {
 const ApiContext = createContext<ApiContextType | undefined>(undefined);
 
 export function ApiProvider({ children }: { children: React.ReactNode }) {
-  const { jwt, loading } = useAuth();
-  
-  // Only create API client if we have a valid JWT
+  const { user, loading } = useAuth();
+
+  // Only create API client once the Gateway session check has completed
+  // and returned a user. Auth travels via the HttpOnly `aiden-gw` cookie,
+  // not a client-held token, so ApiClient no longer needs one.
   const api = useMemo(() => {
-    if (loading || !jwt) return null;
-    return new ApiClient(jwt);
-  }, [jwt, loading]);
+    if (loading || !user) return null;
+    return new ApiClient();
+  }, [user, loading]);
 
   return (
     <ApiContext.Provider value={{ api }}>

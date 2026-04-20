@@ -1,31 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
 import { getValidatedSupabaseConfig } from '../lib/supabase-env';
 
-const { url, serviceRoleKey, anonKey } = getValidatedSupabaseConfig();
+const { url, serviceRoleKey } = getValidatedSupabaseConfig();
 
-console.log('Initializing Supabase clients:', {
+console.log('Initializing Supabase service-role client:', {
   url,
   hasServiceKey: !!serviceRoleKey,
-  hasAnonKey: !!anonKey
 });
 
-// Create auth client for JWT validation
-export const authClient = createClient(
-  url,
-  anonKey,
-  {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false
-    },
-    db: {
-      schema: 'refraim'
-    }
-  }
-);
-
-// Create admin client for server-side operations
+// Service-role client for server-side database operations. All routes
+// trust the Gateway JWT (verified by requireAuth) for user identity and
+// enforce user_id filtering in app code — we do not rely on RLS.
 export const supabase = createClient(
   url,
   serviceRoleKey,
@@ -33,10 +18,10 @@ export const supabase = createClient(
     auth: {
       autoRefreshToken: false,
       persistSession: false,
-      detectSessionInUrl: false
+      detectSessionInUrl: false,
     },
     db: {
-      schema: 'refraim'
-    }
+      schema: 'refraim',
+    },
   }
 );

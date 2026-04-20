@@ -1,180 +1,83 @@
 import { createContext, useContext, useEffect, useState } from 'react';
-import { User, Session } from '@supabase/supabase-js';
-import { supabase } from '../lib/supabase';
+
+/**
+ * refrAIm auth client.
+ *
+ * Source of truth: the Gateway-issued `aiden-gw` JWT cookie, scoped to
+ * `.aiden.services`. The cookie is HttpOnly so we cannot read it from JS
+ * — instead, we call the server's `/api/me` on mount, which verifies the
+ * cookie and returns the decoded user claims.
+ *
+ * Logged-out users are bounced to the Gateway login page. refrAIm does
+ * not have its own sign-in / sign-up form anymore.
+ */
+
+export interface AuthUser {
+  id: string;
+  email: string;
+}
 
 interface AuthContextType {
-  user: User | null;
-  session: Session | null;
-  jwt: string | null;
-  signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string) => Promise<void>;
-  signOut: () => Promise<void>;
+  user: AuthUser | null;
   loading: boolean;
+  signOut: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const GATEWAY_URL =
+  (import.meta.env.VITE_GATEWAY_URL as string | undefined) || 'https://www.aiden.services';
+
+const API_BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) || '/api';
+
+function gatewayLoginUrl(): string {
+  const next = encodeURIComponent(window.location.href);
+  return `${GATEWAY_URL}/login?next=${next}`;
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
-  const [jwt, setJwt] = useState<string | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const tryGatewaySSO = async (): Promise<boolean> => {
-      if (!window.location.hostname.endsWith('.aiden.services')) return false;
+    let cancelled = false;
+
+    const check = async () => {
       try {
-        const res = await fetch('https://www.aiden.services/api/auth/session', {
-          method: 'POST',
-          credentials: 'include',
-        });
-        if (!res.ok) return false;
-        const data = await res.json();
-        // Gateway returns { jwt, user, cookies }. The cookies are Set-Cookie'd
-        // on .aiden.services by the fetch (credentials: 'include' + CORS
-        // allow-credentials on the Gateway response), so Supabase's cookie
-        // store should now have a session. The previous code looked for
-        // data.access_token / data.refresh_token which Gateway never
-        // returned, so SSO silently failed and we always fell through to
-        // the local login wall.
-        if (data.jwt && data.user) {
-          const { data: sessionData } = await supabase.auth.getSession();
-          return !!sessionData.session;
-        }
-        return false;
-      } catch {
-        return false;
-      }
-    };
+        const res = await fetch(`${API_BASE_URL}/me`, { credentials: 'include' });
+        if (cancelled) return;
 
-    const initializeAuth = async () => {
-      try {
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-        
-        if (sessionError) {
-          await tryGatewaySSO();
-          const { data: { session: retrySession } } = await supabase.auth.getSession();
-          if (retrySession?.access_token) {
-            setSession(retrySession);
-            setUser(retrySession.user);
-            setJwt(retrySession.access_token);
-          }
-          return;
-        }
-
-        if (session?.access_token) {
-          const { data: { user }, error: userError } = await supabase.auth.getUser(session.access_token);
-          
-          if (userError || !user) {
-            const { data: { session: freshSession }, error: refreshError } = await supabase.auth.refreshSession();
-            
-            if (refreshError || !freshSession?.access_token) {
-              await signOut();
-              return;
-            }
-
-            setSession(freshSession);
-            setUser(freshSession.user);
-            setJwt(freshSession.access_token);
-          } else {
-            setSession(session);
-            setUser(user);
-            setJwt(session.access_token);
-          }
+        if (res.ok) {
+          const body = (await res.json()) as AuthUser;
+          setUser({ id: body.id, email: body.email });
         } else {
-          const ssoWorked = await tryGatewaySSO();
-          if (ssoWorked) {
-            const { data: { session: ssoSession } } = await supabase.auth.getSession();
-            if (ssoSession?.access_token) {
-              setSession(ssoSession);
-              setUser(ssoSession.user);
-              setJwt(ssoSession.access_token);
-              return;
-            }
-          }
-          setSession(null);
           setUser(null);
-          setJwt(null);
         }
       } catch {
-        // Auth initialization failed silently
+        if (!cancelled) setUser(null);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
-    initializeAuth();
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (session?.access_token) {
-        const { data: { user }, error } = await supabase.auth.getUser(session.access_token);
-        
-        if (error || !user) {
-          await signOut();
-          return;
-        }
-
-        setSession(session);
-        setUser(user);
-        setJwt(session.access_token);
-      } else {
-        setSession(null);
-        setUser(null);
-        setJwt(null);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    check();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    if (error) throw error;
+  const signOut = () => {
+    // Gateway owns logout. It clears the aiden-gw cookie + all sb-*
+    // cookies across .aiden.services and redirects back to the hub
+    // login. Do not clear cookies locally.
+    window.location.href = `${GATEWAY_URL}/auth/logout`;
   };
 
-  const signUp = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
-    if (error) throw error;
-  };
-
-  const signOut = async () => {
-    try {
-      // Sign out from Supabase
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-
-      // Clear session and user state
-      setSession(null);
-      setUser(null);
-
-      // Clear any stored auth data from localStorage
-      localStorage.removeItem('supabase.auth.token');
-      
-      // Redirect to Gateway for centralized logout
-      window.location.href = 'https://www.aiden.services/auth/logout';
-    } catch (error) {
-      throw error;
-    }
-  };
-
-  const value = {
-    user,
-    session,
-    jwt,
-    signIn,
-    signUp,
-    signOut,
-    loading,
-  };
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={{ user, loading, signOut }}>
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth() {
@@ -183,4 +86,8 @@ export function useAuth() {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
+}
+
+export function redirectToGatewayLogin(): void {
+  window.location.href = gatewayLoginUrl();
 }

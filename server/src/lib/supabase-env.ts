@@ -16,13 +16,11 @@ const EXPECTED_PROJECT_REFS = new Set([
 interface SupabaseConfig {
   url: string;
   serviceRoleKey: string;
-  anonKey: string;
 }
 
 export function getValidatedSupabaseConfig(): SupabaseConfig {
   const url = process.env.SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const anonKey = process.env.SUPABASE_ANON_KEY;
 
   if (!url) {
     throw new Error(
@@ -32,9 +30,6 @@ export function getValidatedSupabaseConfig(): SupabaseConfig {
   }
   if (!serviceRoleKey) {
     throw new Error('SUPABASE_SERVICE_ROLE_KEY is not set. No hardcoded fallback is provided.');
-  }
-  if (!anonKey) {
-    throw new Error('SUPABASE_ANON_KEY is not set. No hardcoded fallback is provided.');
   }
 
   const match = url.match(/^https:\/\/([^.]+)\.supabase\.co/);
@@ -47,7 +42,7 @@ export function getValidatedSupabaseConfig(): SupabaseConfig {
     );
   }
 
-  return { url, serviceRoleKey, anonKey };
+  return { url, serviceRoleKey };
 }
 
 export function validateSupabaseEnvOrExit(): void {

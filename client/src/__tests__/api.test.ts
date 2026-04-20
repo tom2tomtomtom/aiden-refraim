@@ -27,26 +27,23 @@ describe('ApiClient', () => {
     vi.restoreAllMocks();
   });
 
-  it('constructor throws when no token provided', () => {
-    expect(() => new ApiClient('')).toThrow('Access token is required');
-  });
-
-  it('request adds Authorization header', async () => {
+  it('request sends credentials for cookie-based auth', async () => {
     const fetchMock = mockFetchResponse({ focus_points: [] });
     globalThis.fetch = fetchMock;
 
-    const client = new ApiClient('test-token-123');
+    const client = new ApiClient();
     await client.getFocusPoints('vid-1');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const callArgs = fetchMock.mock.calls[0];
-    expect(callArgs[1].headers['Authorization']).toBe('Bearer test-token-123');
+    expect(callArgs[1].credentials).toBe('include');
+    expect(callArgs[1].headers['Authorization']).toBeUndefined();
   });
 
   it('request throws on non-200 response', async () => {
     globalThis.fetch = mockFetchResponse({ error: 'Not found' }, 404);
 
-    const client = new ApiClient('test-token');
+    const client = new ApiClient();
     await expect(client.getFocusPoints('vid-1')).rejects.toThrow('Request failed');
   });
 
@@ -54,7 +51,7 @@ describe('ApiClient', () => {
     const fetchMock = mockFetchResponse({ focus_points: [{ id: 'fp-1' }] });
     globalThis.fetch = fetchMock;
 
-    const client = new ApiClient('token');
+    const client = new ApiClient();
     const result = await client.getFocusPoints('vid-abc');
 
     const calledUrl = fetchMock.mock.calls[0][0];
@@ -70,7 +67,7 @@ describe('ApiClient', () => {
       { time_start: 0, time_end: 5, x: 10, y: 10, width: 20, height: 20, description: 'test', source: 'manual' as const },
     ];
 
-    const client = new ApiClient('token');
+    const client = new ApiClient();
     await client.createFocusPoints('vid-abc', points);
 
     const callArgs = fetchMock.mock.calls[0];
@@ -82,7 +79,7 @@ describe('ApiClient', () => {
     const fetchMock = mockFetchResponse({ scan_id: 'scan-1' });
     globalThis.fetch = fetchMock;
 
-    const client = new ApiClient('token');
+    const client = new ApiClient();
     const scanOptions = { mode: 'fast' };
     const result = await client.startScan('vid-abc', scanOptions);
 
@@ -97,7 +94,7 @@ describe('ApiClient', () => {
     const fetchMock = mockFetchResponse({ job_id: 'job-1' });
     globalThis.fetch = fetchMock;
 
-    const client = new ApiClient('token');
+    const client = new ApiClient();
     const options = { platforms: ['tiktok', 'youtube-main'], letterbox: true, quality: 'high' as const };
     const result = await client.processVideo('vid-abc', options);
 

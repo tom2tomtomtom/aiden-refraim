@@ -1,7 +1,7 @@
-import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import React, { useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { AuthProvider, useAuth, redirectToGatewayLogin } from './contexts/AuthContext';
 import { ApiProvider } from './contexts/ApiContext';
 import { VideoProvider } from './contexts/VideoContext';
 import { FocusPointsProvider } from './contexts/FocusPointsContext';
@@ -44,16 +44,18 @@ const queryClient = new QueryClient();
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
 
-  if (loading) {
+  useEffect(() => {
+    if (!loading && !user) {
+      redirectToGatewayLogin();
+    }
+  }, [loading, user]);
+
+  if (loading || !user) {
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="animate-spin h-8 w-8 border-b-2 border-red-hot" />
       </div>
     );
-  }
-
-  if (!user) {
-    return <Navigate to="/login" replace />;
   }
 
   return <>{children}</>;

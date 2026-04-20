@@ -45,14 +45,10 @@ export interface Video {
 }
 
 export class ApiClient {
-  private accessToken: string;
-
-  constructor(accessToken: string) {
-    if (!accessToken) {
-      throw new Error('Access token is required');
-    }
-    this.accessToken = accessToken;
-  }
+  // Auth travels via the HttpOnly `aiden-gw` cookie on every request.
+  // The cookie is set by Gateway at login and scoped to .aiden.services,
+  // so it reaches the refrAIm server automatically. We never read or
+  // hold the JWT client-side.
 
   private async request<T>(
     endpoint: string,
@@ -62,7 +58,6 @@ export class ApiClient {
       const isFormData = options.body instanceof FormData;
       const headers: Record<string, string> = {
         ...options.headers as Record<string, string>,
-        'Authorization': `Bearer ${this.accessToken}`,
       };
 
       if (!isFormData) {

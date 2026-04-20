@@ -34,7 +34,7 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
     maxSize: MAX_UPLOAD_BYTES,
   });
 
-  const { jwt } = useAuth();
+  const { user } = useAuth();
 
   const handleUpload = async () => {
     if (!file) {
@@ -42,7 +42,7 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
       return;
     }
 
-    if (!jwt) {
+    if (!user) {
       onError(new Error('You must be logged in to upload videos'));
       return;
     }
@@ -74,7 +74,7 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
         });
       }, 500);
 
-      const apiClient = new ApiClient(jwt);
+      const apiClient = new ApiClient();
       // Platforms are selected later in the editor/process step. Sending an
       // empty array here avoids tripping the server's platform allowlist with
       // bogus values like ["youtube","instagram","tiktok"] that don't match
