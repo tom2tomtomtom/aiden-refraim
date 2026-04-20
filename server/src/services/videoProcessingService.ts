@@ -109,10 +109,17 @@ class BasicVideoProcessor implements VideoProcessor {
     try {
       await this.updateVideoStatus(video.id, 'processing', undefined, 0);
 
-      // Ensure processed directory exists
+      // Ensure output directories exist. `/tmp/uploads` holds the
+      // per-platform rendered mp4s and must be created alongside
+      // `/tmp/processed`; Railway's container ships without it and
+      // FFmpeg fails with "No such file or directory" otherwise.
       const processedDir = path.join('/tmp', 'processed');
       if (!fs.existsSync(processedDir)) {
         fs.mkdirSync(processedDir, { recursive: true });
+      }
+      const tempDir = this.config.processingOptions.tempDir;
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
       }
 
       // Analyze video to detect subjects and important regions
@@ -249,10 +256,15 @@ class BasicVideoProcessor implements VideoProcessor {
     try {
       await this.updateVideoStatus(video.id, 'processing', undefined, 0);
 
-      // Ensure processed directory exists
+      // Ensure output directories exist. See process() for details —
+      // `/tmp/uploads` is the ffmpeg output target and must exist.
       const processedDir = path.join('/tmp', 'processed');
       if (!fs.existsSync(processedDir)) {
         fs.mkdirSync(processedDir, { recursive: true });
+      }
+      const tempDir = this.config.processingOptions.tempDir;
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
       }
 
       // Fetch focus points for this video
