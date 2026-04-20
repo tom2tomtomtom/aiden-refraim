@@ -121,7 +121,11 @@ export class ApiClient {
     }
   }
 
-  async uploadVideo(file: File, platforms: string[]): Promise<Video> {
+  async uploadVideo(
+    file: File,
+    platforms: string[],
+    onProgress?: (percent: number) => void
+  ): Promise<Video> {
     if (!(file instanceof File)) {
       throw new Error('Invalid file object');
     }
@@ -147,9 +151,54 @@ export class ApiClient {
     const title = file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
     formData.append('title', title);
 
-    return this.request<Video>('/videos/upload', {
-      method: 'POST',
-      body: formData
+    // Use XHR (not fetch) because the Fetch API still doesn't expose
+    // upload byte progress. Reporting actual bytes-sent %% up to 99 while
+    // the server finishes its storage handoff gives the user meaningful
+    // feedback during 100MB / multi-minute uploads.
+    const url = `${API_BASE_URL}/videos/upload`;
+
+    return new Promise<Video>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url, true);
+      xhr.withCredentials = true;
+
+      // No Content-Type: FormData sets its own multipart boundary. Don't
+      // set Authorization either — the aiden-gw cookie is HttpOnly and
+      // travels automatically via withCredentials.
+
+      if (onProgress) {
+        xhr.upload.addEventListener('progress', (e) => {
+          if (e.lengthComputable) {
+            // Cap at 99 while we wait for the server to hand off to Supabase
+            // storage; the server response flips us to 100.
+            const pct = Math.min(99, Math.round((e.loaded / e.total) * 99));
+            onProgress(pct);
+          }
+        });
+      }
+
+      xhr.onload = () => {
+        let body: unknown;
+        try {
+          body = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+        } catch {
+          body = { error: xhr.responseText || 'Invalid server response' };
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(body as Video);
+        } else {
+          const msg = (body as { error?: string; details?: string })?.error || `Request failed: ${xhr.statusText || xhr.status}`;
+          const err = new Error(msg);
+          (err as Error & { status?: number }).status = xhr.status;
+          reject(err);
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.ontimeout = () => reject(new Error('Upload timed out'));
+      xhr.onabort = () => reject(new Error('Upload aborted'));
+
+      xhr.send(formData);
     });
   }
 

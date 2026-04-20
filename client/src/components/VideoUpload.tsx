@@ -63,27 +63,20 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
       setUploading(true);
       setUploadProgress(0);
 
-      // Simulate progress during upload
-      const progressInterval = setInterval(() => {
-        setUploadProgress(prev => {
-          if (prev >= 90) {
-            clearInterval(progressInterval);
-            return 90;
-          }
-          return prev + 10;
-        });
-      }, 500);
-
       const apiClient = new ApiClient();
       // Platforms are selected later in the editor/process step. Sending an
       // empty array here avoids tripping the server's platform allowlist with
       // bogus values like ["youtube","instagram","tiktok"] that don't match
       // its canonical ids (youtube-main, instagram-story, etc.).
-      const response = await apiClient.uploadVideo(file, []);
+      const response = await apiClient.uploadVideo(file, [], (pct) => {
+        // Real bytes-sent progress from XHR (capped at 99% by the client
+        // until the server response flips to 100%). Replaces the old
+        // fake 10%/500ms interval that sat at 90% for minutes while the
+        // actual upload continued in the background.
+        setUploadProgress(pct);
+      });
 
-      clearInterval(progressInterval);
       setUploadProgress(100);
-
       onUploadComplete(response.id);
     } catch (error) {
       if (error instanceof Error) {
@@ -113,7 +106,13 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
                 <div className="w-full h-3 bg-black-deep">
                   <div className="h-full bg-red-hot transition-all" style={{ width: `${uploadProgress}%` }} />
                 </div>
-                <p className="text-xs text-white-dim mt-1">{uploadProgress}%</p>
+                <p className="text-xs text-white-dim mt-1">
+                  {uploadProgress < 99
+                    ? `${uploadProgress}%`
+                    : uploadProgress < 100
+                      ? 'Sending to storage — this can take a minute for large files…'
+                      : 'Complete'}
+                </p>
               </div>
             )}
             <button

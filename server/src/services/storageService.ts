@@ -75,19 +75,29 @@ export class StorageService {
       }
 
       // 4. Read and upload file
+      // Use async readFile instead of readFileSync to avoid blocking the
+      // event loop for seconds on 100MB+ uploads. Before this, the server
+      // would stall ALL other HTTP requests while multer's temp file was
+      // being slurped into memory — one upload could freeze the whole
+      // container for half a minute.
       console.log('Reading file...');
-      const fileBuffer = fs.readFileSync(filePath);
+      const readStart = Date.now();
+      const fileBuffer = await fs.promises.readFile(filePath);
+      const readMs = Date.now() - readStart;
+
       const uniqueFileName = `${Date.now()}-${Math.random().toString(36).substring(2)}${fileExt}`;
       const storagePath = `original/${uniqueFileName}`;
-      
+
       console.log('Uploading to storage:', {
         bucket: STORAGE_BUCKET,
         path: storagePath,
         size: fileBuffer.length,
-        type: this.getMimeType(fileExt)
+        type: this.getMimeType(fileExt),
+        readMs,
       });
 
       // Upload file
+      const uploadStart = Date.now();
       const { data, error } = await supabase.storage
         .from(STORAGE_BUCKET)
         .upload(storagePath, fileBuffer, {
@@ -95,6 +105,13 @@ export class StorageService {
           cacheControl: '3600',
           upsert: false
         });
+      const uploadMs = Date.now() - uploadStart;
+      console.log('Storage upload response:', {
+        ok: !error,
+        uploadMs,
+        sizeBytes: fileBuffer.length,
+        bytesPerSec: Math.round(fileBuffer.length / Math.max(1, uploadMs / 1000)),
+      });
 
       if (error) {
         console.error('Storage upload error:', error);
