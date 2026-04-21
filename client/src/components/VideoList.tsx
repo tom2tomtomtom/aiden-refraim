@@ -212,7 +212,10 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
                     Failed
                   </span>
                 ) : (
-                  <span className="text-white-muted">Pending</span>
+                  // Anything else is UPLOADED-awaiting-export. Previous "Pending"
+                  // label implied the server was working when actually the user
+                  // still needs to open the video and pick export formats.
+                  <span className="text-orange-accent">Ready to export · open to pick formats</span>
                 )}
               </div>
 
