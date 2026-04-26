@@ -4,17 +4,12 @@
  * Calls the AIDEN Gateway token API for balance checks and deductions.
  * Uses X-Service-Key + X-User-Id headers for server-to-server auth.
  *
- * DELIBERATE fail-OPEN: refrAIm's primary billing is standalone Stripe
- * (free/starter/pro/agency plans). Gateway token deductions are a
- * secondary hook, only active when AIDEN_SERVICE_KEY is configured.
- * If Gateway is unreachable we do NOT block video export — the user has
- * already paid via their Stripe subscription. Unlike other hub apps
- * (Synthetic Research, Listen, Brand Audit, Brief Sharpener, Ads) which
- * MUST fail closed because Gateway IS their billing, refrAIm is hybrid.
- *
- * If refrAIm ever migrates to Gateway-primary billing, flip both returns
- * below to `{ allowed: false, gatewayUnavailable: true }` and
- * `{ success: false, error: 'gateway_unreachable' }` respectively.
+ * Fail-closed: if Gateway is unreachable, both checkTokens and deductTokens
+ * deny the operation. Gateway token deductions are an optional secondary pool
+ * on top of standalone Stripe billing (AIDEN_SERVICE_KEY must be set for them
+ * to fire). Even as a secondary pool, silently skipping deductions on outage
+ * leaks from the Gateway token balance users have purchased. Stripe plan quota
+ * is a separate guard in videoController.ts and is unaffected by this.
  */
 
 const GATEWAY_URL = process.env.GATEWAY_URL || 'https://www.aiden.services'
@@ -59,14 +54,15 @@ export async function checkTokens(
 
     if (!res.ok) {
       console.error(`[gateway-tokens] Check failed: ${res.status}`)
-      return { allowed: true, required: 0, balance: 0 }
+      // Fail closed: don't grant access on Gateway error.
+      return { allowed: false, required: 0, balance: 0 }
     }
 
     return res.json()
   } catch (err) {
-    // See file header: refrAIm bills via Stripe, Gateway is secondary.
     console.error('[gateway-tokens] Check threw:', err)
-    return { allowed: true, required: 0, balance: 0 }
+    // Fail closed: don't grant access on network failure.
+    return { allowed: false, required: 0, balance: 0 }
   }
 }
 
@@ -88,12 +84,14 @@ export async function deductTokens(
 
     if (!res.ok) {
       console.error(`[gateway-tokens] Deduct failed: ${res.status}`)
-      return { success: true, remaining: 0 }
+      // Fail closed: pretending the deduct succeeded silently leaks tokens.
+      return { success: false, error: `gateway_error_${res.status}` }
     }
 
     return res.json()
   } catch (err) {
     console.error('[gateway-tokens] Deduct threw:', err)
-    return { success: true, remaining: 0 }
+    // Fail closed: don't silently succeed on network failure.
+    return { success: false, error: 'gateway_unreachable' }
   }
 }
