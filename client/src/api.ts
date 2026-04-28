@@ -163,7 +163,7 @@ export class ApiClient {
       xhr.withCredentials = true;
 
       // No Content-Type: FormData sets its own multipart boundary. Don't
-      // set Authorization either — the aiden-gw cookie is HttpOnly and
+      // set Authorization either; the aiden-gw cookie is HttpOnly and
       // travels automatically via withCredentials.
 
       if (onProgress) {

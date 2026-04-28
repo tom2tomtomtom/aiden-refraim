@@ -184,7 +184,7 @@ function AIReframePreview({
       <div className="flex items-center gap-2 mb-2">
         <div className="w-2 h-2 bg-green-500 animate-pulse rounded-full" />
         <span className="text-[10px] font-bold text-white-muted uppercase tracking-wide">
-          Live Reframe Preview — {platform.replace(/-/g, ' ')} ({ratioW}:{ratioH})
+          Live Reframe Preview: {platform.replace(/-/g, ' ')} ({ratioW}:{ratioH})
         </span>
       </div>
 
@@ -234,7 +234,7 @@ function AIReframePreview({
               </div>
               <div className="text-[10px] text-white-dim">{activeSeg.composition}</div>
               <div className="text-[10px] text-white-dim font-mono">
-                {activeSeg.time_start.toFixed(1)}s — {activeSeg.time_end.toFixed(1)}s
+                {activeSeg.time_start.toFixed(1)}s to {activeSeg.time_end.toFixed(1)}s
               </div>
               {activeSeg.reason && (
                 <div className="text-[10px] text-white-dim italic">{activeSeg.reason}</div>
@@ -961,7 +961,7 @@ export default function FocusSelector() {
         cropsToSend.push({
           time: midTime,
           imageBase64: cropCanvas.toDataURL('image/jpeg', 0.85),
-          description: `${seg.follow_subject} — ${seg.composition}`,
+          description: `${seg.follow_subject}: ${seg.composition}`,
           ratio: `${ratioW}:${ratioH}`,
         });
       }
@@ -1015,7 +1015,7 @@ export default function FocusSelector() {
     setCropReviews(prev => {
       if (!prev || !prev[idx]) return prev;
       const updated = [...prev];
-      updated[idx] = { ...updated[idx], quality: 'needs_adjustment', issues: ['Adjusted — re-run QA to verify'], suggestion: '' };
+      updated[idx] = { ...updated[idx], quality: 'needs_adjustment', issues: ['Adjusted. Re-run QA to verify.'], suggestion: '' };
       return updated;
     });
   }, []);
@@ -1272,7 +1272,7 @@ export default function FocusSelector() {
 
       const augmentedBrief = [
         storyBrief,
-        '\n\nCRITICAL QA FEEDBACK — these segments had composition issues and need different offsets:',
+        '\n\nCRITICAL QA FEEDBACK: these segments had composition issues and need different offsets:',
         qaFeedback,
         '\nPlease significantly adjust offset_x and offset_y for these segments to fix the problems.',
       ].filter(Boolean).join('\n');
@@ -1353,7 +1353,7 @@ export default function FocusSelector() {
       offset_x: 0,
       offset_y: 0,
       transition: 'hard_cut' as const,
-      reason: 'Gap fill — center crop (adjust as needed)',
+      reason: 'Gap fill: center crop (adjust as needed)',
     }));
 
     setAiStrategy(prev => {
@@ -1643,7 +1643,7 @@ export default function FocusSelector() {
                 </div>
               )}
 
-              {/* Live crop preview — full width */}
+              {/* Live crop preview (full width) */}
               <div className="mb-2">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-[10px] text-white-dim uppercase">
@@ -1657,7 +1657,7 @@ export default function FocusSelector() {
                       </span>
                     ) : (
                       <span className="text-[10px] text-red-hot uppercase">
-                        Gap — no keyframe
+                        Gap: no keyframe
                       </span>
                     );
                   })()}
@@ -1900,7 +1900,7 @@ export default function FocusSelector() {
                     );
                   })()}
 
-                  {/* Focus point list — compact */}
+                  {/* Focus point list (compact) */}
                   <div className="max-h-32 overflow-y-auto space-y-0.5">
                     {[...focusPoints].sort((a, b) => a.time_start - b.time_start).map(fp => {
                       const isActive = scrubTime >= fp.time_start && scrubTime < fp.time_end;
@@ -1922,7 +1922,7 @@ export default function FocusSelector() {
                     })}
                   </div>
 
-                  {/* Done — view preview */}
+                  {/* Done: view preview */}
                   <div className="mt-3 pt-3 border-t border-border-subtle space-y-2">
                     <button
                       onClick={() => {
@@ -1932,7 +1932,7 @@ export default function FocusSelector() {
                       className="w-full px-4 py-3 bg-green-600 text-white text-sm font-bold uppercase tracking-wide border-2 border-green-600 hover:bg-green-500 hover:border-green-500 transition-all flex items-center justify-center gap-2"
                     >
                       <Play className="w-4 h-4" />
-                      Done — View Live Preview ↓
+                      Done. View Live Preview ↓
                     </button>
                     <a
                       href={`/export/${videoId}`}
@@ -2109,7 +2109,7 @@ export default function FocusSelector() {
                       </div>
 
                       <div className="text-[10px] text-white-dim mb-2">
-                        {formatTime(subject.first_seen)} — {formatTime(subject.last_seen)} ({formatTime(subject.last_seen - subject.first_seen)})
+                        {formatTime(subject.first_seen)} to {formatTime(subject.last_seen)} ({formatTime(subject.last_seen - subject.first_seen)})
                       </div>
 
                       {thumbnails.has(subject.id) ? (
@@ -2185,7 +2185,7 @@ export default function FocusSelector() {
                 </p>
               </div>
 
-              {/* Story Brief — always visible in story step */}
+              {/* Story Brief (always visible in story step) */}
               <div className="mb-4 p-3 bg-black-deep border border-border-subtle">
                 <div className="flex items-center gap-2 mb-2">
                   <BookOpen className="w-4 h-4 text-orange-accent" />
@@ -2533,7 +2533,7 @@ export default function FocusSelector() {
                     onClick={applyAIStrategy}
                     className="w-full px-3 py-2 text-xs text-white-dim font-bold uppercase tracking-wide border border-border-subtle hover:border-orange-accent hover:text-orange-accent transition-all text-center"
                   >
-                    Skip QA — Apply directly
+                    Skip QA. Apply directly.
                   </button>
                 </div>
               )}
@@ -2618,7 +2618,7 @@ export default function FocusSelector() {
                 </div>
               )}
 
-              {/* Segment list — click to expand & adjust */}
+              {/* Segment list: click to expand and adjust */}
               <div className="max-h-[500px] overflow-y-auto space-y-1 mb-4">
                 {aiStrategy.segments.map((seg, idx) => {
                   const review = cropReviews?.[idx];

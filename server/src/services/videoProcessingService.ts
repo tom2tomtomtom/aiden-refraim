@@ -207,7 +207,7 @@ class BasicVideoProcessor implements VideoProcessor {
 
       if (updateError3) throw updateError3;
 
-      // Always jump to 100% at the end — 'failed' is a terminal state
+      // Always jump to 100% at the end. 'failed' is a terminal state
       // too and the client uses progress=100 + status to unblock its
       // polling loop. Previously on any per-platform error we left the
       // row at 90% forever (user-visible "stuck at 90%").
@@ -268,7 +268,7 @@ class BasicVideoProcessor implements VideoProcessor {
     try {
       await this.updateVideoStatus(video.id, 'processing', undefined, 0);
 
-      // Ensure output directories exist. See process() for details —
+      // Ensure output directories exist. See process() for details.
       // `/tmp/uploads` is the ffmpeg output target and must exist.
       const processedDir = path.join('/tmp', 'processed');
       if (!fs.existsSync(processedDir)) {
@@ -371,7 +371,7 @@ class BasicVideoProcessor implements VideoProcessor {
           const progress = 30 + Math.floor((completedPlatforms / platformCount) * 60);
           await this.updateVideoStatus(video.id, 'processing', undefined, progress);
         } catch (error) {
-          // See process() for rationale — generic message to client, full
+          // See process() for rationale. Generic message to client; full
           // raw error (including ffmpeg stderr) to server logs only.
           const errorId = `err_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
           console.error(`[${errorId}] Error processing video with focus points for ${platform}:`, error);
@@ -401,7 +401,7 @@ class BasicVideoProcessor implements VideoProcessor {
 
       if (updateError3) throw updateError3;
 
-      // Always terminate at 100 — 'failed' is terminal too. See process()
+      // Always terminate at 100. 'failed' is terminal too. See process()
       // for the fuller explanation. Previously stuck at 90 on any error.
       const finalStatus = Object.values(platformOutputs).some(output => output.status === 'error')
         ? 'failed'

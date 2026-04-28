@@ -40,7 +40,7 @@ const authLimiter = rateLimit({
 app.use(morgan('dev'));
 
 // Baseline security headers applied to every response (including the
-// Vite-built client bundle served below). Conservative set — CSP is
+// Vite-built client bundle served below). Conservative set. CSP is
 // deferred pending a dedicated allowlist pass.
 app.use((_req, res, next) => {
   res.setHeader(
@@ -113,7 +113,7 @@ app.use((req, res, next) => {
 
 // Minimal public health endpoint. Consumed by Railway healthcheck + any
 // uptime monitor. Intentionally does NOT return timestamp, version, or
-// git SHA — those enable fingerprinting with no operational benefit.
+// git SHA; those enable fingerprinting with no operational benefit.
 app.get('/api/health', (_req, res) => {
   res.status(200).json({ ok: true });
 });
@@ -155,7 +155,7 @@ app.use((err: any, req: express.Request, res: express.Response, _next: express.N
     path: req.path,
     method: req.method,
     userId: (req as any).user?.id,
-    // Don't log raw req.body — it can contain auth tokens, file buffers, or PII.
+    // Don't log raw req.body. It can contain auth tokens, file buffers, or PII.
     bodyKeys: req.body && typeof req.body === 'object' ? Object.keys(req.body) : undefined,
     query: req.query,
     fileMeta: req.file

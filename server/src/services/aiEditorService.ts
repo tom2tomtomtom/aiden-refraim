@@ -194,7 +194,7 @@ async function analyzeScenes(
           ...imageContent,
           {
             type: 'text',
-            text: `For each frame above, write ONE concise sentence describing what is happening visually — subjects, actions, mood, lighting, weather, props, spatial relationships. Focus on what a video editor needs to know for framing decisions.
+            text: `For each frame above, write ONE concise sentence describing what is happening visually: subjects, actions, mood, lighting, weather, props, spatial relationships. Focus on what a video editor needs to know for framing decisions.
 
 Respond with ONLY valid JSON:
 { "scenes": [{ "frame": 1, "time": 0.0, "description": "..." }, ...] }`,
@@ -240,7 +240,7 @@ function buildPrompt(
 ): string {
   const sections: string[] = [];
 
-  sections.push(`You are a professional video editor creating a reframing strategy. Your goal is to serve the STORY — not just follow the biggest or most-detected object.
+  sections.push(`You are a professional video editor creating a reframing strategy. Your goal is to serve the STORY, not just follow the biggest or most-detected object.
 
 VIDEO: ${videoDuration.toFixed(1)}s duration
 TARGET: ${platform}
@@ -248,10 +248,10 @@ PLATFORM RULES: ${platformRule}`);
 
   // HIGHEST PRIORITY: Story brief from the user
   if (storyBrief) {
-    sections.push(`STORY BRIEF (from the user — HIGHEST PRIORITY):
+    sections.push(`STORY BRIEF (from the user, HIGHEST PRIORITY):
 "${storyBrief}"
 
-The user has described the narrative intent. Your editorial choices MUST serve this story. A subject's narrative importance overrides its detection frequency or screen coverage. If the brief mentions something specific (e.g. "rain on the window"), that IS the shot — even if object detection labelled it differently.`);
+The user has described the narrative intent. Your editorial choices MUST serve this story. A subject's narrative importance overrides its detection frequency or screen coverage. If the brief mentions something specific (e.g. "rain on the window"), that IS the shot, even if object detection labelled it differently.`);
   }
 
   // HIGH PRIORITY: Manual annotations
@@ -259,12 +259,12 @@ The user has described the narrative intent. Your editorial choices MUST serve t
     const annotationList = annotations
       .sort((a, b) => a.time - b.time)
       .map(a => {
-        const keyTag = a.isKeyMoment ? ' — KEY MOMENT' : '';
+        const keyTag = a.isKeyMoment ? ' (KEY MOMENT)' : '';
         return `[${a.time.toFixed(1)}s] "${a.label}" (region: ${a.bbox[0].toFixed(0)}%,${a.bbox[1].toFixed(0)}%,${a.bbox[2].toFixed(0)}%x${a.bbox[3].toFixed(0)}%)${keyTag}`;
       })
       .join('\n');
 
-    sections.push(`USER ANNOTATIONS (manually marked — HIGH PRIORITY):
+    sections.push(`USER ANNOTATIONS (manually marked, HIGH PRIORITY):
 ${annotationList}
 
 These annotations identify elements that automatic detection missed or mislabelled. The user drew a box and named it semantically. KEY MOMENT annotations are narrative pivot points that MUST be prominently featured. Use the user's label as the follow_subject name, and the bbox position for framing.`);
@@ -279,7 +279,7 @@ These annotations identify elements that automatic detection missed or mislabell
     sections.push(`SCENE DESCRIPTIONS (from vision analysis):
 ${sceneList}
 
-These describe what is actually happening in each shot. Use them to understand the editorial flow — scene changes, mood shifts, and narrative beats that object detection alone cannot capture.`);
+These describe what is actually happening in each shot. Use them to understand the editorial flow: scene changes, mood shifts, and narrative beats that object detection alone cannot capture.`);
   }
 
   // LOWEST PRIORITY: Auto-detected subjects with shot scale analysis
@@ -293,20 +293,20 @@ These describe what is actually happening in each shot. Use them to understand t
     })
     .join('\n');
 
-  sections.push(`DETECTED SUBJECTS (auto-detection — use as fallback):
+  sections.push(`DETECTED SUBJECTS (auto-detection, use as fallback):
 ${subjectList}
 
 These are COCO-SSD object detection labels. They may be wrong or misleading (e.g. "potted_plant" might be a window with rain). If user annotations or the story brief contradict these labels, trust the user.
 
-SHOT SCALE AWARENESS — CRITICAL FOR VERTICAL CROPS:
+SHOT SCALE AWARENESS (CRITICAL FOR VERTICAL CROPS):
 The screen coverage % tells you how tight the original framing is. When cropping 16:9 landscape to 9:16 vertical, you only keep ~32% of the horizontal frame width. Your offset_x and offset_y values MUST account for this.
 
-- EXTREME CLOSE-UP (>50% coverage): Subject fills the frame. The vertical crop will only show a narrow slice. Use offset_x to center precisely on the FACE (not body center). Use offset_y of -15 to -25 to weight toward the head. The crop will be tight — that's OK, but the face must not be cut off.
+- EXTREME CLOSE-UP (>50% coverage): Subject fills the frame. The vertical crop will only show a narrow slice. Use offset_x to center precisely on the FACE (not body center). Use offset_y of -15 to -25 to weight toward the head. The crop will be tight; that's OK, but the face must not be cut off.
 - CLOSE-UP (30-50%): Tight but workable. Ensure offset_x centers on the subject's face/key feature. offset_y of -10 to -20 for people.
 - MEDIUM SHOT (15-30%): Good reframing room. Standard offsets work.
 - WIDE SHOT (<15%): Plenty of room. Use composition variety.
 
-KEY RULE FOR PEOPLE IN VERTICAL: The crop will be a narrow vertical slice. For people, the crop must be centered on their FACE horizontally, and weighted toward the head vertically. A person's body center is NOT where you want the crop — the FACE is what viewers look at. Use offset_y of -15 to -25 for close-ups of people.`);
+KEY RULE FOR PEOPLE IN VERTICAL: The crop will be a narrow vertical slice. For people, the crop must be centered on their FACE horizontally, and weighted toward the head vertically. A person's body center is NOT where you want the crop. The FACE is what viewers look at. Use offset_y of -15 to -25 for close-ups of people.`);
 
   // Priority rules
   sections.push(`PRIORITY RULES:
@@ -412,7 +412,7 @@ function generateRuleBasedStrategy(
       offset_x: isVertical ? 0 : (compositions[compIndex] === 'rule_of_thirds_right' ? 15 : compositions[compIndex] === 'rule_of_thirds_left' ? -15 : 0),
       offset_y: personFaceOffset,
       transition: t === 0 || switchedSubject ? 'hard_cut' : 'smooth_pan',
-      reason: `Following ${target.class}${isCloseUp ? ' (close-up — face-weighted crop)' : ''}${activeSubjects.length > 1 ? ` (${activeSubjects.length} active)` : ''}${switchedSubject ? ' — subject switch' : ''}`,
+      reason: `Following ${target.class}${isCloseUp ? ' (close-up, face-weighted crop)' : ''}${activeSubjects.length > 1 ? ` (${activeSubjects.length} active)` : ''}${switchedSubject ? ' (subject switch)' : ''}`,
     });
 
     lastSubjectClass = target.class;
@@ -456,7 +456,7 @@ export async function reviewCrops(
     return [
       {
         type: 'text' as const,
-        text: `Crop ${i + 1} at ${crop.time.toFixed(1)}s — ${crop.ratio} for ${targetPlatform}. Focus point: "${crop.description}"`,
+        text: `Crop ${i + 1} at ${crop.time.toFixed(1)}s, ${crop.ratio} for ${targetPlatform}. Focus point: "${crop.description}"`,
       },
       {
         type: 'image' as const,
@@ -488,14 +488,14 @@ For each crop, evaluate the COMPOSITION QUALITY of what you see in the actual im
 CHECK FOR:
 1. FACES: Is any person's face cut off at the edge? Is the face partially out of frame?
 2. SUBJECT POSITION: Is the main subject awkwardly jammed against an edge?
-3. HEADROOM: For people — is there reasonable space above their head, or is it cropped too tight?
+3. HEADROOM: For people, is there reasonable space above their head, or is it cropped too tight?
 4. KEY ELEMENTS: Are important elements (text, products, key props) cut off or missing?
 5. BALANCE: Does the crop look intentionally composed, or accidental/awkward?
 
 Rate each crop:
 - "good": Well composed, subject properly framed
-- "needs_adjustment": Minor issues — subject slightly off-center or edge-clipped
-- "bad": Major issue — face cut off, subject barely visible, or key element missing
+- "needs_adjustment": Minor issues; subject slightly off-center or edge-clipped
+- "bad": Major issue; face cut off, subject barely visible, or key element missing
 
 Respond with ONLY valid JSON:
 {
