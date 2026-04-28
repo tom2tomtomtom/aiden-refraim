@@ -5,7 +5,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
  *
  * Source of truth: the Gateway-issued `aiden-gw` JWT cookie, scoped to
  * `.aiden.services`. The cookie is HttpOnly so we cannot read it from JS
- * — instead, we call the server's `/api/me` on mount, which verifies the
+ * Instead, we call the server's `/api/me` on mount, which verifies the
  * cookie and returns the decoded user claims.
  *
  * Logged-out users are bounced to the Gateway login page. refrAIm does

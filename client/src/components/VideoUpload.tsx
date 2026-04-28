@@ -110,7 +110,7 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
                   {uploadProgress < 99
                     ? `${uploadProgress}%`
                     : uploadProgress < 100
-                      ? 'Sending to storage — this can take a minute for large files…'
+                      ? 'Sending to storage. This can take a minute for large files...'
                       : 'Complete'}
                 </p>
               </div>

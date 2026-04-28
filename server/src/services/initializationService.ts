@@ -67,7 +67,7 @@ export class InitializationService {
       }
 
       // Check if videos table exists. If it doesn't, bail with a clear
-      // error — we used to execute server/src/config/schema.sql here via
+      // error. We used to execute server/src/config/schema.sql here via
       // supabase.query(), but supabase-js has no .query() method and
       // this branch has been dead since the client was swapped in.
       // Schema is managed by Supabase migrations in production; for
@@ -79,7 +79,7 @@ export class InitializationService {
 
       if (existsError?.message?.includes('relation "videos" does not exist')) {
         throw new Error(
-          'videos table missing — run supabase migrations (supabase/migrations/*.sql) against the target project'
+          'videos table missing. Run supabase migrations (supabase/migrations/*.sql) against the target project.'
         );
       } else {
         console.log('Videos table already exists');

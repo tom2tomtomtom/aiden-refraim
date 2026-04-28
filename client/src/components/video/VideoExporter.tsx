@@ -100,7 +100,7 @@ export default function VideoExporter() {
       setError(err instanceof Error ? err.message : 'Export failed');
       setIsExporting(false);
       // Even on a 402 the server may have rolled back the reservation, or
-      // may have charged it — refresh either way so the banner reflects
+      // may have charged it. Refresh either way so the banner reflects
       // the real remaining quota.
       refreshPlan();
     }
@@ -140,7 +140,7 @@ export default function VideoExporter() {
               </span>{' '}
               of {plan.exports_limit} exports left this month
               {quotaExhausted && (
-                <span className="text-red-hot"> — upgrade to export more.</span>
+                <span className="text-red-hot"> Upgrade to export more.</span>
               )}
             </p>
           )}

@@ -1,4 +1,4 @@
-// IMPORTANT: ./instrument must be first — Sentry 10 / OpenTelemetry
+// IMPORTANT: ./instrument must be first. Sentry 10 / OpenTelemetry
 // instruments Express and HTTP at require time, so it must run before
 // those modules are loaded. It also loads dotenv on our behalf.
 import './instrument';

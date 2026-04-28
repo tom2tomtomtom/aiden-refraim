@@ -110,7 +110,7 @@ export async function getQuotaState(userId: string): Promise<QuotaState> {
  * post-increment state on success, or `null` when the cap is hit.
  *
  * Not fully race-safe (two concurrent calls could each pass the read
- * check), but sufficient for a free-tier gate — a single user rapid-firing
+ * check), but sufficient for a free-tier gate. A single user rapid-firing
  * exports might slip by 1 over the cap, which is well under the tolerance
  * we need. Use a Postgres RPC (SELECT ... FOR UPDATE, or a SECURITY DEFINER
  * function) if this becomes a billing integrity concern.

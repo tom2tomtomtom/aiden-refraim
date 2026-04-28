@@ -78,7 +78,7 @@ export class StorageService {
       // Use async readFile instead of readFileSync to avoid blocking the
       // event loop for seconds on 100MB+ uploads. Before this, the server
       // would stall ALL other HTTP requests while multer's temp file was
-      // being slurped into memory — one upload could freeze the whole
+      // being slurped into memory. One upload could freeze the whole
       // container for half a minute.
       console.log('Reading file...');
       const readStart = Date.now();
@@ -233,8 +233,8 @@ export class StorageService {
       // Supabase public URLs look like:
       //   https://<project>.supabase.co/storage/v1/object/public/<bucket>/<path>
       // The previous implementation used a regex literal with ${STORAGE_BUCKET}
-      // interpolation, which doesn't interpolate inside a `/regex/` literal —
-      // it matched the string "${STORAGE_BUCKET}", so every delete silently
+      // interpolation, which doesn't interpolate inside a `/regex/` literal.
+      // It matched the string "${STORAGE_BUCKET}", so every delete silently
       // failed with "Invalid video URL" and storage files were orphaned.
       const marker = `/storage/v1/object/public/${STORAGE_BUCKET}/`;
       const markerIdx = videoUrl.indexOf(marker);

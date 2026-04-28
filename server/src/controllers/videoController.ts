@@ -35,7 +35,7 @@ function sanitizePlatforms(input: unknown): string[] {
 function safeUnlink(filePath: string | undefined): void {
   if (!filePath) return;
   fs.promises.unlink(filePath).catch((err) => {
-    // ENOENT is fine — storage service may have already removed it.
+    // ENOENT is fine; storage service may have already removed it.
     if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
       console.warn('[upload] Failed to clean up temp file:', filePath, err);
     }
@@ -180,7 +180,7 @@ export const getVideoStatus = async (req: Request, res: Response) => {
     // The client polls this endpoint during export and expects
     // `{ status, progress, platforms: { [platform]: { status, progress, url, error } } }`.
     // Previously we returned only `{ status, platformOutputs }`, so the
-    // client's `status.platforms || {}` lookup was always empty — per-
+    // client's `status.platforms || {}` lookup was always empty. Per-
     // platform progress bars never rendered, the aggregate `overallProgress`
     // stayed at 0, and the final Download button never appeared. The
     // raw `processing_jobs.progress` row (updated at 30 → 90 → 100 by
@@ -284,7 +284,7 @@ export const processVideo = async (req: Request, res: Response) => {
       });
     }
 
-    // RFM-A-009 GUARD — dual-billing observability.
+    // RFM-A-009 GUARD: dual-billing observability.
     // refrAIm has two billing paths active in production: the Stripe
     // plan quota above, and the Gateway token deduction below (on iff
     // AIDEN_SERVICE_KEY is set). Until the platform-level architecture
@@ -293,7 +293,7 @@ export const processVideo = async (req: Request, res: Response) => {
     // and Sentry rather than silent.
     if (process.env.AIDEN_SERVICE_KEY) {
       console.warn(
-        '[RFM-A-009] Dual billing active — Stripe quota reserved AND Gateway token deduction will run for user %s. Architecture decision pending.',
+        '[RFM-A-009] Dual billing active. Stripe quota reserved AND Gateway token deduction will run for user %s. Architecture decision pending.',
         user.id,
       );
 
@@ -322,7 +322,7 @@ export const processVideo = async (req: Request, res: Response) => {
     });
 
     // Start processing asynchronously; deduct tokens only on success.
-    // We do NOT refund the Stripe plan quota on failure — the work was
+    // We do NOT refund the Stripe plan quota on failure. The work was
     // attempted and the FFmpeg cost was paid. If the failure is a hard
     // infra error (quota-gate followed by a server crash), the user can
     // retry within the month cap.
