@@ -17,6 +17,11 @@ import meRoutes from './routes/meRoutes';
 
 const app = express();
 
+// RFM-SEC-XPB: Express auto-sets `X-Powered-By: Express` on every response,
+// disclosing the framework. Disable it before any middleware can leak the
+// default header.
+app.disable('x-powered-by');
+
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP

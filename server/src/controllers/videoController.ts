@@ -284,9 +284,20 @@ export const processVideo = async (req: Request, res: Response) => {
       });
     }
 
-    // Gate on Gateway token balance (optional, only when AIDEN_SERVICE_KEY
-    // is wired). This is a secondary pool on top of the Stripe plan.
+    // RFM-A-009 GUARD — dual-billing observability.
+    // refrAIm has two billing paths active in production: the Stripe
+    // plan quota above, and the Gateway token deduction below (on iff
+    // AIDEN_SERVICE_KEY is set). Until the platform-level architecture
+    // decision is made (see CLAUDE.md §7), log loudly whenever both
+    // would charge the same user so the leak is visible in Railway logs
+    // and Sentry rather than silent.
     if (process.env.AIDEN_SERVICE_KEY) {
+      console.warn(
+        '[RFM-A-009] Dual billing active — Stripe quota reserved AND Gateway token deduction will run for user %s. Architecture decision pending.',
+        user.id,
+      );
+
+      // Gate on Gateway token balance.
       const tokenCheck = await checkTokens(user.id, 'refraim', 'video_export');
       if (!tokenCheck.allowed) {
         // Quota was already reserved; refund it so the user doesn't burn a

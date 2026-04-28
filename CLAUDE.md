@@ -44,19 +44,31 @@ refrAIm is the quiet efficient post assistant who cuts what you need without ask
 
 ## 6. Auth: Gateway integration
 
-**Current status (2026-04-18):** refrAIm uses Supabase auth directly, NOT Gateway SSO. Client login routes to Supabase login page (`client/src/App.tsx`). Server validates JWT via Supabase authClient.
+**Current state (matches code as of 2026-04-28):** refrAIm uses Gateway SSO. Both server and client trust the Gateway-signed `aiden-gw` JWT cookie:
 
-**Billing is standalone Stripe, NOT deducted from Gateway token balance** — by design for now, may change later.
+- **Client (`client/src/contexts/AuthContext.tsx`):** Calls `/api/me` on mount with `credentials: 'include'`; the cookie is HttpOnly so JS can't read it directly. Logged-out users are bounced to `${GATEWAY_URL}/login?next=…`. There is no Supabase login form anymore.
+- **Server (`server/src/middleware/auth.ts`):** `requireAuth` extracts the `aiden-gw` cookie (or `Authorization: Bearer <jwt>` for programmatic clients) and verifies via `verifyGatewayJWT()`. No Supabase Auth call. JWT signing uses the shared HS256 `JWT_SECRET` across all hub apps.
 
-Partial work: commit b03620e "Add Gateway SSO bootstrap for .aiden.services domain" (~2 months old) landed some scaffolding but the client still routes to Supabase. Full Gateway SSO migration is deferred — refrAIm stays on standalone Supabase auth + standalone Stripe billing for now.
+(The earlier docs in this file claimed Supabase-direct auth — that referred to commit `b03620e` scaffolding which has since been completed. Code is now Gateway-SSO end to end.)
 
-## 7. Token billing
+## 7. Token billing — DUAL BILLING SURFACE (RFM-A-009)
 
-`refraim.video_export = 2` is registered in Gateway's `TOKEN_COSTS` (confirmed against `aiden-gateway/lib/tokens.ts`). The server (`server/src/lib/gateway-tokens.ts`) calls `checkTokens()` + `deductTokens()` from `videoController.ts` when `AIDEN_SERVICE_KEY` is set.
+refrAIm currently has **two independent billing paths active in code** at `server/src/controllers/videoController.ts:processVideo`:
 
-**Current billing model:** refrAIm runs on standalone Stripe (free / starter $29 / pro $79 / agency $199). Gateway token deductions are an optional hook — they fire when `AIDEN_SERVICE_KEY` is set, but are not the primary billing path.
+1. **Standalone Stripe plan quota** (always on): `reserveExport(user.id)` decrements the monthly Stripe-plan export count. Free = 3/mo, Starter $29 = 50/mo, Pro $79 + Agency $199 = unlimited.
+2. **Gateway token deduction** (on iff `AIDEN_SERVICE_KEY` is set): `checkTokens()` + `deductTokens('refraim', 'video_export')` deducts 2 Gateway tokens per export.
 
-**Gotcha:** if `AIDEN_SERVICE_KEY` is missing, `deductTokens()` silently returns `{ success: true, remaining: 0 }` without actually deducting. In the current standalone-Stripe model this is fine, but if refrAIm is migrated to Gateway-primary billing, this fallback must be changed to fail-closed.
+**The dual-billing risk:** in any environment where `AIDEN_SERVICE_KEY` is set on the refrAIm Railway service, a user with an active Stripe subscription is charged BOTH ways for every export — once via their monthly Stripe plan, once via their Gateway token balance. There is no plan-aware short-circuit between the two.
+
+**Required architecture decision (not yet made):**
+- (a) **Stripe-only:** Unset `AIDEN_SERVICE_KEY` in refrAIm production env and remove the Gateway deduction code path. refrAIm stays on standalone billing.
+- (b) **Gateway-only:** Replace the standalone Stripe plans with Gateway-token top-ups. Remove `reserveExport`/`refundExport` and the standalone-Stripe checkout routes.
+- (c) **Plan-aware:** Free / Starter users charge via Gateway tokens; Pro / Agency subscribers skip the Gateway deduction entirely.
+- (d) **Status-quo with explicit guard:** Document that the current production env intentionally leaves `AIDEN_SERVICE_KEY` unset on refrAIm; add a startup assertion that fails the deploy if both `AIDEN_SERVICE_KEY` and any Stripe plan are configured.
+
+A safety guard is in place at `videoController.ts` (search for `RFM-A-009 GUARD`) that logs a loud warning when both billing paths would charge the same user, so the leak is at least observable until the decision is made.
+
+`refraim.video_export = 2` is registered in Gateway's `TOKEN_COSTS` (`aiden-gateway/lib/tokens.ts`). The local Gateway client lives at `server/src/lib/gateway-tokens.ts`.
 
 ## 8. Critical files
 
