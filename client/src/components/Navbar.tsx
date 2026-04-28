@@ -3,6 +3,9 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Menu, X, LogOut } from 'lucide-react';
 
+const GATEWAY_URL =
+  (import.meta.env.VITE_GATEWAY_URL as string | undefined) || 'https://www.aiden.services';
+
 export function Navbar() {
   const { user, signOut } = useAuth();
   const location = useLocation();
@@ -69,7 +72,7 @@ export function Navbar() {
         {user && (
           <div className="hidden md:flex items-center gap-4">
             <a
-              href="https://www.aiden.services/dashboard"
+              href={`${GATEWAY_URL}/dashboard`}
               className="text-xs font-bold uppercase tracking-wide text-white-dim hover:text-orange-accent transition-colors"
             >
               &larr; Hub
@@ -102,7 +105,7 @@ export function Navbar() {
           {user && (
             <div className="flex items-center justify-between pt-3 border-t border-border-subtle">
               <a
-                href="https://www.aiden.services/dashboard"
+                href={`${GATEWAY_URL}/dashboard`}
                 className="text-xs font-bold uppercase tracking-wide text-white-dim hover:text-orange-accent transition-colors"
               >
                 &larr; Hub
