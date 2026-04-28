@@ -73,6 +73,13 @@ function App() {
                 <div className="animate-spin h-8 w-8 border-b-2 border-red-hot" />
               </div>
             }>
+            {/* Skip-to-content link: visually hidden until focused by keyboard users */}
+            <a
+              href="#main-content"
+              className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:bg-red-hot focus:text-white focus:px-4 focus:py-2 focus:text-sm focus:font-bold focus:uppercase focus:tracking-wide"
+            >
+              Skip to content
+            </a>
             <div className="min-h-screen bg-black-deep">
               <Routes>
                 <Route path="/login" element={<Login />} />
@@ -82,7 +89,7 @@ function App() {
                     <PrivateRoute>
                       <div>
                         <Navbar />
-                        <main className="container mx-auto px-4 py-8">
+                        <main id="main-content" className="container mx-auto px-4 py-8">
                           <Dashboard />
                         </main>
                       </div>
@@ -93,7 +100,7 @@ function App() {
                   path="/editor/:videoId"
                   element={
                     <PrivateRoute>
-                      <div>
+                      <div id="main-content">
                         <Navbar />
                         <VideoProvider>
                           <FocusPointsProvider>
@@ -110,7 +117,7 @@ function App() {
                   path="/export/:videoId"
                   element={
                     <PrivateRoute>
-                      <div>
+                      <div id="main-content">
                         <Navbar />
                         <VideoProvider>
                           <FocusPointsProvider>
