@@ -13,7 +13,15 @@ import {
 } from '../controllers/videoController';
 
 const router = Router();
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100MB
+
+// DEFINITIVE upload size limit: 100 MB.
+// This is the only active video upload router (mounted at /api/videos in app.ts).
+// The old server/src/routes/videos.ts (which had a 500 MB limit) was unmounted
+// and has been removed (BUG-RFM-002 / BUG-RFM-003).
+// If you need to raise this limit, change MAX_UPLOAD_BYTES here and update the
+// Railway service memory/disk settings accordingly. FFmpeg processing on large
+// files can exceed the Railway free-tier memory limit.
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
 const upload = multer({
   dest: 'uploads/',
   limits: {
