@@ -15,7 +15,7 @@ A platform for automatically resizing and reformatting videos for various social
   - Real-time processing status
   - Live video previews
   - Toast notifications
-- **Authentication**: Secure user authentication via Supabase
+- **Authentication**: Gateway SSO via AIDEN Platform (`www.aiden.services`)
 - **Cloud Storage**: Reliable video storage using Supabase Storage
 
 ## Tech Stack
@@ -30,9 +30,9 @@ A platform for automatically resizing and reformatting videos for various social
 
 ### Backend
 - Express.js with TypeScript
-- Supabase for authentication and storage
+- Gateway SSO (AIDEN Platform JWT) for authentication
+- Supabase Postgres + Storage for data and video files
 - FFMPEG for video processing
-- WebSocket for real-time updates
 
 ## Project Structure
 
@@ -79,16 +79,42 @@ refraim/
 
 3. Set up environment variables:
    ```bash
-   # In server/.env
-   SUPABASE_URL=your_supabase_url
-   SUPABASE_ANON_KEY=your_supabase_anon_key
-   PORT=3000
+   # In server/.env (Railway env in production)
+   # Auth (REQUIRED)
+   JWT_SECRET=<same value as AIDEN Gateway JWT_SECRET — must match exactly>
+   GATEWAY_URL=https://www.aiden.services
 
-   # In client/.env
-   VITE_SUPABASE_URL=your_supabase_url
-   VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
-   VITE_API_URL=http://localhost:3000
+   # Supabase (data + storage only, NOT auth)
+   SUPABASE_URL=https://bktujlufguenjytbdndn.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=<service role key>
+   SUPABASE_POSTGRES_URL=postgresql://...
+
+   # Stripe billing
+   STRIPE_SECRET_KEY=sk_live_...
+   STRIPE_PRICE_ID_STARTER=price_...
+   STRIPE_PRICE_ID_PRO=price_...
+   STRIPE_PRICE_ID_AGENCY=price_...
+   STRIPE_WEBHOOK_SECRET=whsec_...
+
+   # Optional — enables Gateway token deductions alongside Stripe (see CLAUDE.md §7)
+   AIDEN_SERVICE_KEY=<gateway service key>
+
+   # Other
+   ANTHROPIC_API_KEY=sk-ant-...
+   CLIENT_URL=https://refraim.aiden.services
+   PORT=3000
+   NODE_ENV=development
+
+   # In client/.env (Vite build, committed for local dev only)
+   VITE_API_URL=/api
+   VITE_GATEWAY_URL=https://www.aiden.services
+   VITE_SUPABASE_URL=https://bktujlufguenjytbdndn.supabase.co
+   VITE_SUPABASE_ANON_KEY=<anon key>
    ```
+
+   **Auth note:** refrAIm uses Gateway SSO. Users log in at `www.aiden.services`. The
+   `JWT_SECRET` env var must be identical to the one set on the Gateway Railway service.
+   All routes verify the `aiden-gw` HttpOnly cookie; there is no local login form.
 
 4. Start development servers:
    ```bash
