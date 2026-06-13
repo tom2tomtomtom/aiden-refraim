@@ -10,7 +10,7 @@ interface FocusPointOverlayProps {
 }
 
 export default function FocusPointOverlay({ onFocusPointSelect, selectedPointId }: FocusPointOverlayProps) {
-  const { currentTime, duration, videoElementRef } = useVideo();
+  const { currentTime, duration } = useVideo();
   const { focusPoints, addFocusPoint, updateFocusPoint } = useFocusPoints();
   const interpolated = useInterpolatedPosition(focusPoints, currentTime);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -176,7 +176,7 @@ export default function FocusPointOverlay({ onFocusPointSelect, selectedPointId 
 
       {/* Double-click hint when no focus points */}
       {activeFocusPoints.length === 0 && focusPoints.length === 0 && (
-        <div className="absolute bottom-2 left-2 px-2 py-1 bg-black/60 text-white-dim text-[10px] uppercase tracking-wide pointer-events-none">
+        <div className="absolute top-2 left-2 md:top-auto md:bottom-2 px-2 py-1 bg-black/75 text-white-muted text-[10px] uppercase tracking-wide pointer-events-none">
           Double-click to add focus point
         </div>
       )}

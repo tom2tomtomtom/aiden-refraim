@@ -65,8 +65,12 @@ export function Navbar() {
 
         {/* Mobile hamburger */}
         <button
+          type="button"
           onClick={() => setMobileOpen(!mobileOpen)}
-          className="md:hidden text-white-dim hover:text-red-hot transition-colors"
+          aria-label={mobileOpen ? 'Close section navigation' : 'Open section navigation'}
+          aria-expanded={mobileOpen}
+          aria-controls="refraim-section-navigation"
+          className="md:hidden min-h-11 min-w-11 flex items-center justify-center text-white-dim hover:text-red-hot transition-colors"
         >
           {mobileOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
         </button>
@@ -74,7 +78,7 @@ export function Navbar() {
 
       {/* Mobile menu */}
       {mobileOpen && (
-        <div className="md:hidden mt-3 pt-3 border-t border-border-subtle space-y-3">
+        <div id="refraim-section-navigation" className="md:hidden mt-3 pt-3 border-t border-border-subtle space-y-3">
           <div className="flex flex-col gap-3">
             {navLinks}
           </div>

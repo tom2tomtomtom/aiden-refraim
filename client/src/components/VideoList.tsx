@@ -21,7 +21,7 @@ interface VideoListProps {
   onDeleteVideo: (video: Video) => void;
 }
 
-export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: VideoListProps) {
+export function VideoList({ onVideoSelect, onDeleteVideo }: VideoListProps) {
   const { api } = useApi();
   const [videos, setVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(false);
@@ -48,14 +48,14 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
       }
 
       // If any videos are processing, poll for updates
-      const hasProcessingVideos = fetchedVideos.some(v => v.status === 'PROCESSING');
+      const hasProcessingVideos = fetchedVideos.some(v => String(v.status).toLowerCase() === 'processing');
       if (hasProcessingVideos) {
         pollIntervalRef.current = setInterval(async () => {
           const updatedVideos = await api.getUserVideos();
           setVideos(updatedVideos);
 
           // Stop polling if no videos are processing
-          if (!updatedVideos.some(v => v.status === 'PROCESSING')) {
+          if (!updatedVideos.some(v => String(v.status).toLowerCase() === 'processing')) {
             if (pollIntervalRef.current) {
               clearInterval(pollIntervalRef.current);
               pollIntervalRef.current = null;
@@ -168,77 +168,99 @@ export function VideoList({ onVideoSelect, onProcessVideo, onDeleteVideo }: Vide
     )}
 
     <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-      {videos.map((video) => (
-        <div
-          key={video.id}
-          className="bg-black-card border border-border-subtle overflow-hidden"
-        >
+      {videos.map((video) => {
+        const displayName = video.title || formatVideoName(video.original_url);
+        const status = String(video.status).toLowerCase();
+
+        return (
           <div
-            className="aspect-video bg-black-deep relative cursor-pointer group"
-            onClick={() => onVideoSelect(video)}
+            key={video.id}
+            className="bg-black-card border border-border-subtle overflow-hidden transition-colors hover:border-white-dim"
           >
-            <video
-              src={video.platform_outputs?.youtube?.url || video.original_url}
-              crossOrigin="anonymous"
-              className="w-full h-full object-cover pointer-events-none"
-              preload="metadata"
-            />
-            <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-opacity flex items-center justify-center">
-              <Play className="w-12 h-12 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+            <div
+              className="aspect-video bg-black-deep relative cursor-pointer group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-hot"
+              onClick={() => onVideoSelect(video)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onVideoSelect(video);
+                }
+              }}
+              role="button"
+              tabIndex={0}
+              aria-label={`Edit ${displayName}`}
+            >
+              <video
+                src={video.platform_outputs?.youtube?.url || video.original_url}
+                crossOrigin="anonymous"
+                className="w-full h-full object-contain pointer-events-none bg-black"
+                preload="metadata"
+              />
+              <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-opacity flex items-center justify-center">
+                <Play className="w-12 h-12 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+              </div>
             </div>
-          </div>
 
-          <div className="p-4">
-            <h3 className="font-bold text-white uppercase tracking-wide truncate">
-              {video.title || formatVideoName(video.original_url)}
-            </h3>
-            <p className="text-sm text-white-dim mt-1">
-              {new Date(video.created_at).toLocaleDateString()}
-            </p>
+            <div className="p-4">
+              <h3
+                className="font-bold text-white uppercase tracking-wide text-sm leading-snug min-h-[2.5rem] overflow-hidden"
+                style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}
+                title={displayName}
+              >
+                {displayName}
+              </h3>
+              <p className="text-sm text-white-dim mt-1">
+                {new Date(video.created_at).toLocaleDateString()}
+              </p>
 
-            <div className="flex items-center justify-between mt-4">
-              <div className="text-sm">
-                {video.status === 'COMPLETE' ? (
-                  <span className="text-green-500">✓ Processed</span>
-                ) : video.status === 'PROCESSING' ? (
-                  <div className="flex items-center space-x-2">
-                    <div className="animate-spin h-4 w-4 border-b-2 border-red-hot" />
-                    <span className="text-orange-accent">
-                      Processing {video.processing_jobs?.[0]?.progress || 0}%
+              <div className="flex items-start justify-between gap-3 mt-4">
+                <div className="text-sm leading-snug min-w-0">
+                  {status === 'completed' || status === 'complete' ? (
+                    <span className="text-green-500">✓ Processed</span>
+                  ) : status === 'processing' ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="animate-spin h-4 w-4 border-b-2 border-red-hot" />
+                      <span className="text-orange-accent">
+                        Processing {video.processing_jobs?.[0]?.progress || 0}%
+                      </span>
+                    </div>
+                  ) : status === 'failed' || status === 'error' ? (
+                    <span className="text-red-500" title={video.processing_jobs?.[0]?.error || 'Processing failed'}>
+                      Failed
                     </span>
-                  </div>
-                ) : video.status === 'ERROR' ? (
-                  <span className="text-red-500" title={video.processing_jobs?.[0]?.error || 'Processing failed'}>
-                    Failed
-                  </span>
-                ) : (
-                  // Anything else is UPLOADED-awaiting-export. Previous "Pending"
-                  // label implied the server was working when actually the user
-                  // still needs to open the video and pick export formats.
-                  <span className="text-orange-accent">Ready to export · open to pick formats</span>
-                )}
-              </div>
+                  ) : (
+                    // Anything else is UPLOADED-awaiting-export. Previous "Pending"
+                    // label implied the server was working when actually the user
+                    // still needs to open the video and pick export formats.
+                    <span className="text-orange-accent">Ready to export · open to pick formats</span>
+                  )}
+                </div>
 
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => onVideoSelect(video)}
-                  className="p-2 text-white-muted hover:text-orange-accent hover:bg-black-deep"
-                  title="Edit Video"
-                >
-                  <Settings className="w-5 h-5" />
-                </button>
-                <button
-                  onClick={() => confirmDelete(video)}
-                  className="p-2 text-white-muted hover:text-red-hot hover:bg-black-deep"
-                  title="Delete Video"
-                >
-                  <Trash2 className="w-5 h-5" />
-                </button>
+                <div className="flex gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => onVideoSelect(video)}
+                    className="p-2 text-white-muted hover:text-orange-accent hover:bg-black-deep"
+                    title="Edit Video"
+                    aria-label={`Edit ${displayName}`}
+                  >
+                    <Settings className="w-5 h-5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => confirmDelete(video)}
+                    className="p-2 text-white-muted hover:text-red-hot hover:bg-black-deep"
+                    title="Delete Video"
+                    aria-label={`Delete ${displayName}`}
+                  >
+                    <Trash2 className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
     </>
   );
