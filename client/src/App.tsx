@@ -7,6 +7,7 @@ import { VideoProvider } from './contexts/VideoContext';
 import { FocusPointsProvider } from './contexts/FocusPointsContext';
 import { ScanProvider } from './contexts/ScanContext';
 import { Navbar } from './components/Navbar';
+import AppNav from './components/AppNav';
 
 const Dashboard = React.lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })));
 const Login = React.lazy(() => import('./pages/Login').then(m => ({ default: m.Login })));
@@ -81,6 +82,7 @@ function App() {
               Skip to content
             </a>
             <div className="min-h-screen bg-black-deep">
+              <AppNav appName=".refrAIm" tagline="reformat any video" currentApp="refrAIm" />
               <Routes>
                 <Route path="/login" element={<Login />} />
                 <Route
