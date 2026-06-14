@@ -91,6 +91,10 @@ export default function VideoPlayer() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isPlaying, setIsPlaying, setCurrentTime, videoElementRef]);
 
+  const togglePlayPause = useCallback(() => {
+    setIsPlaying(!isPlaying);
+  }, [isPlaying, setIsPlaying]);
+
   if (!videoUrl) {
     return (
       <div className="aspect-video bg-black-card border-2 border-border-subtle flex items-center justify-center">
@@ -98,10 +102,6 @@ export default function VideoPlayer() {
       </div>
     );
   }
-
-  const togglePlayPause = useCallback(() => {
-    setIsPlaying(!isPlaying);
-  }, [isPlaying, setIsPlaying]);
 
   return (
     <div ref={containerRef} className="relative cursor-pointer" onClick={togglePlayPause}>

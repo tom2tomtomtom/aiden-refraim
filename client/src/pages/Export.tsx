@@ -106,9 +106,25 @@ export default function ExportPage() {
     }
   }, [paramVideoId, videoUrl, loadVideo, loadFocusPoints]);
 
+  // Hidden main video for context sync
+  const videoRefCallback = useCallback((el: HTMLVideoElement | null) => {
+    (videoElementRef as React.MutableRefObject<HTMLVideoElement | null>).current = el;
+    mainVideoRef.current = el;
+  }, [videoElementRef]);
+
+  const handleTimeUpdate = useCallback(() => {
+    const video = mainVideoRef.current;
+    if (video) setCurrentTime(video.currentTime);
+  }, [setCurrentTime]);
+
+  const handlePlay = useCallback(() => setIsPlaying(true), [setIsPlaying]);
+  const handlePause = useCallback(() => setIsPlaying(false), [setIsPlaying]);
+
   // Match the editor's graceful error state for invalid / unknown /
   // forbidden video ids, rather than silently rendering the export UI
   // over a missing video (which then 500s on Export click).
+  // NOTE: this early return must stay below all hook calls above so the
+  // hook order is identical on every render (Rules of Hooks).
   if (videoError && !videoUrl) {
     return (
       <div className="max-w-7xl mx-auto px-4 py-12">
@@ -125,20 +141,6 @@ export default function ExportPage() {
       </div>
     );
   }
-
-  // Hidden main video for context sync
-  const videoRefCallback = useCallback((el: HTMLVideoElement | null) => {
-    (videoElementRef as React.MutableRefObject<HTMLVideoElement | null>).current = el;
-    mainVideoRef.current = el;
-  }, [videoElementRef]);
-
-  const handleTimeUpdate = useCallback(() => {
-    const video = mainVideoRef.current;
-    if (video) setCurrentTime(video.currentTime);
-  }, [setCurrentTime]);
-
-  const handlePlay = useCallback(() => setIsPlaying(true), [setIsPlaying]);
-  const handlePause = useCallback(() => setIsPlaying(false), [setIsPlaying]);
 
   if (isLoading) {
     return (
