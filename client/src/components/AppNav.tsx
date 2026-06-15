@@ -59,6 +59,19 @@ export default function AppNav({ appName, tagline, currentApp }: AppNavProps) {
     }
   }, [])
 
+  // Publish the rendered nav height so each app can offset its own pinned chrome
+  // (handles flex-wrap on narrow widths instead of a hardcoded guess).
+  useEffect(() => {
+    const el = wrapRef.current?.closest('.aiden-nav') as HTMLElement | null
+    if (!el) return
+    const setVar = () =>
+      document.documentElement.style.setProperty('--aiden-nav-h', `${el.offsetHeight}px`)
+    setVar()
+    const ro = new ResizeObserver(setVar)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   return (
     <header className="aiden-nav">
       <style>{AIDEN_NAV_CSS}</style>
@@ -113,7 +126,7 @@ export default function AppNav({ appName, tagline, currentApp }: AppNavProps) {
 }
 
 const AIDEN_NAV_CSS = `
-.aiden-nav { display:flex; align-items:center; gap:12px; padding:12px 18px; background:#141417; border-bottom:1px solid #2a2a30; font-family:system-ui,-apple-system,'Segoe UI',sans-serif; flex-wrap:wrap; position:relative; z-index:40; }
+.aiden-nav { display:flex; align-items:center; gap:12px; padding:12px 18px; background:#141417; border-bottom:1px solid #2a2a30; font-family:system-ui,-apple-system,'Segoe UI',sans-serif; flex-wrap:wrap; position:sticky; top:0; z-index:60; }
 .aiden-nav * { box-sizing:border-box; }
 .aiden-nav-brand { display:flex; align-items:center; gap:7px; text-decoration:none; }
 .aiden-nav-logo { height:22px; width:auto; display:block; }
