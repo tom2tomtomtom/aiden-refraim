@@ -23,6 +23,7 @@ export default function VideoExporter() {
   const [useLetterboxing, setUseLetterboxing] = useState(false);
   const [quality, setQuality] = useState<ExportQuality>('medium');
   const [isExporting, setIsExporting] = useState(false);
+  const [isUpgrading, setIsUpgrading] = useState(false);
   const [exportProgress, setExportProgress] = useState<Record<string, { status: string; progress: number; url?: string; error?: string }>>({});
   const [error, setError] = useState<string | null>(null);
   const [plan, setPlan] = useState<PlanState | null>(null);
@@ -105,6 +106,22 @@ export default function VideoExporter() {
       refreshPlan();
     }
   }, [api, videoId, selectedPlatforms, useLetterboxing, quality, refreshPlan]);
+
+  const handleUpgrade = useCallback(async () => {
+    if (!api || !plan) return;
+    setIsUpgrading(true);
+    setError(null);
+
+    try {
+      const { url } = plan.plan === 'free'
+        ? await api.createCheckout('starter')
+        : await api.createPortalSession();
+      window.location.href = url;
+    } catch {
+      setError('Could not open billing. Please try again.');
+      setIsUpgrading(false);
+    }
+  }, [api, plan]);
 
   const handleDownload = useCallback(async (platform: string) => {
     if (!api || !videoId) return;
@@ -282,12 +299,14 @@ export default function VideoExporter() {
         </div>
       ) : (
         <button
-          onClick={handleExport}
-          disabled={selectedPlatforms.length === 0 || quotaExhausted}
+          onClick={quotaExhausted ? handleUpgrade : handleExport}
+          disabled={selectedPlatforms.length === 0 || isUpgrading}
           className="w-full bg-red-hot text-white px-6 py-3 text-sm font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           title={quotaExhausted ? 'Monthly export limit reached. Upgrade your plan to keep exporting.' : undefined}
         >
-          {quotaExhausted
+          {isUpgrading
+            ? 'Opening billing...'
+            : quotaExhausted
             ? 'Upgrade to export more'
             : `Export ${selectedPlatforms.length} Platform${selectedPlatforms.length !== 1 ? 's' : ''}`}
         </button>

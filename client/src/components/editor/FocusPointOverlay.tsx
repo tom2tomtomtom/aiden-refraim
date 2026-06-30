@@ -161,13 +161,13 @@ export default function FocusPointOverlay({ onFocusPointSelect, selectedPointId 
               {fp.description}
             </div>
 
-            {/* Resize handles (corners) for selected point */}
+            {/* Selection markers only. The box moves, but it does not resize. */}
             {isSelected && (
               <>
-                <div className="absolute -top-1 -left-1 w-2 h-2 bg-red-hot cursor-nw-resize" />
-                <div className="absolute -top-1 -right-1 w-2 h-2 bg-red-hot cursor-ne-resize" />
-                <div className="absolute -bottom-1 -left-1 w-2 h-2 bg-red-hot cursor-sw-resize" />
-                <div className="absolute -bottom-1 -right-1 w-2 h-2 bg-red-hot cursor-se-resize" />
+                <div className="absolute -top-1 -left-1 w-2 h-2 bg-red-hot pointer-events-none" />
+                <div className="absolute -top-1 -right-1 w-2 h-2 bg-red-hot pointer-events-none" />
+                <div className="absolute -bottom-1 -left-1 w-2 h-2 bg-red-hot pointer-events-none" />
+                <div className="absolute -bottom-1 -right-1 w-2 h-2 bg-red-hot pointer-events-none" />
               </>
             )}
           </div>
