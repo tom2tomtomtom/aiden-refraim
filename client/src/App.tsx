@@ -82,7 +82,6 @@ function App() {
               Skip to content
             </a>
             <div className="min-h-screen bg-black-deep">
-              <AppNav appName=".refrAIm" tagline="reformat any video" currentApp="refrAIm" />
               <Routes>
                 <Route path="/login" element={<Login />} />
                 <Route
@@ -90,6 +89,7 @@ function App() {
                   element={
                     <PrivateRoute>
                       <div>
+                        <AppNav appName=".refrAIm" tagline="reformat any video" currentApp="refrAIm" />
                         <Navbar />
                         <main id="main-content" className="container mx-auto px-4 py-8">
                           <Dashboard />
@@ -103,6 +103,7 @@ function App() {
                   element={
                     <PrivateRoute>
                       <div id="main-content">
+                        <AppNav appName=".refrAIm" tagline="reformat any video" currentApp="refrAIm" />
                         <Navbar />
                         <VideoProvider>
                           <FocusPointsProvider>
@@ -120,6 +121,7 @@ function App() {
                   element={
                     <PrivateRoute>
                       <div id="main-content">
+                        <AppNav appName=".refrAIm" tagline="reformat any video" currentApp="refrAIm" />
                         <Navbar />
                         <VideoProvider>
                           <FocusPointsProvider>
