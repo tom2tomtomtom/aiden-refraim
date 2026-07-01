@@ -39,15 +39,41 @@ export default function VideoExporter() {
     }
   }, [api]);
 
+  // Surface already-completed outputs (from this session or a prior export) so
+  // the download links persist. The transient /status feed only exists during
+  // an active export; the durable source of truth is video.platform_outputs.
+  const hydrateOutputs = useCallback(async () => {
+    if (!api || !videoId) return;
+    try {
+      const v = await api.getVideo(videoId);
+      const outputs = v.platform_outputs;
+      if (outputs && Object.keys(outputs).length > 0) {
+        setExportProgress(prev => {
+          const next = { ...prev };
+          for (const [key, o] of Object.entries(outputs)) {
+            // Don't overwrite a live 'complete' entry we already have.
+            if (next[key]?.status !== 'complete') {
+              next[key] = { status: o.status, progress: 100, url: o.url };
+            }
+          }
+          return next;
+        });
+      }
+    } catch {
+      // Non-fatal: downloads just won't pre-populate.
+    }
+  }, [api, videoId]);
+
   useEffect(() => {
     refreshPlan();
+    hydrateOutputs();
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = null;
       }
     };
-  }, [refreshPlan]);
+  }, [refreshPlan, hydrateOutputs]);
 
   const togglePlatform = (platform: string) => {
     setSelectedPlatforms(prev =>
@@ -75,9 +101,16 @@ export default function VideoExporter() {
       pollIntervalRef.current = setInterval(async () => {
         try {
           const status = await api.getProcessingStatus(videoId);
-          setExportProgress(status.platforms || {});
+          const platforms = status.platforms || {};
+          // Merge, never replace: a sparse mid-flight poll must not wipe
+          // entries that have already reached 'complete'.
+          setExportProgress(prev => ({ ...prev, ...platforms }));
 
-          const allDone = Object.values(status.platforms || {}).every(
+          // An EMPTY platforms map must not count as "all done" — every() is
+          // vacuously true on an empty array, which used to stop the poll
+          // before any progress was recorded and hide the download links.
+          const entries = Object.values(platforms);
+          const allDone = entries.length > 0 && entries.every(
             p => p.status === 'complete' || p.status === 'error'
           );
           if (allDone || status.status === 'completed' || status.status === 'failed') {
@@ -87,6 +120,9 @@ export default function VideoExporter() {
             }
             setIsExporting(false);
             refreshPlan();
+            // Guarantee the finished outputs (with download URLs) render even
+            // if the transient status was sparse at the moment we stopped.
+            hydrateOutputs();
           }
         } catch {
           if (pollIntervalRef.current) {
@@ -105,7 +141,7 @@ export default function VideoExporter() {
       // the real remaining quota.
       refreshPlan();
     }
-  }, [api, videoId, selectedPlatforms, useLetterboxing, quality, refreshPlan]);
+  }, [api, videoId, selectedPlatforms, useLetterboxing, quality, refreshPlan, hydrateOutputs]);
 
   const handleUpgrade = useCallback(async () => {
     if (!api || !plan) return;
