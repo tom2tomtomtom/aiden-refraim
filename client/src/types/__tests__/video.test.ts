@@ -9,7 +9,7 @@ describe('OUTPUT_FORMATS', () => {
   it('each format has required fields (name, aspectRatio, width, height, platform, type)', () => {
     const requiredFields = ['name', 'aspectRatio', 'width', 'height', 'platform', 'type'];
 
-    for (const [key, format] of Object.entries(OUTPUT_FORMATS)) {
+    for (const [, format] of Object.entries(OUTPUT_FORMATS)) {
       for (const field of requiredFields) {
         expect(format).toHaveProperty(field);
         expect((format as Record<string, unknown>)[field]).toBeDefined();

@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
 import { useFocusPoints } from '../../contexts/FocusPointsContext';
 import { useVideo } from '../../contexts/VideoContext';
 import { Trash2, MapPin, Clock, Maximize2 } from 'lucide-react';

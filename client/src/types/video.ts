@@ -1,19 +1,4 @@
-export interface Video {
-  id: string;
-  user_id: string;
-  original_url: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  platform_outputs: Record<string, PlatformOutput> | null;
-  processing_metadata: {
-    duration: number;
-    fps: number;
-    resolution: { width: number; height: number };
-  } | null;
-  title: string | null;
-  description: string | null;
-  created_at: string;
-  updated_at: string;
-}
+export type { Video } from '../api';
 
 export interface PlatformOutput {
   url: string;

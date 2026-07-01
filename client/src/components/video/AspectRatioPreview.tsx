@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import { useRef, useEffect } from 'react';
 import { useVideo } from '../../contexts/VideoContext';
 import { useFocusPoints } from '../../contexts/FocusPointsContext';
 

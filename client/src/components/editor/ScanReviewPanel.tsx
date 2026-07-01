@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { useScan } from '../../contexts/ScanContext';
 import { useVideo } from '../../contexts/VideoContext';
 import type { Subject } from '../../types/scan';

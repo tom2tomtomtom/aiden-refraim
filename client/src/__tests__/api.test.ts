@@ -56,7 +56,7 @@ describe('ApiClient', () => {
 
     const calledUrl = fetchMock.mock.calls[0][0];
     expect(calledUrl).toContain('/videos/vid-abc/focus-points');
-    expect(result).toEqual([{ id: 'fp-1' }]);
+    expect(result).toEqual([{ id: 'fp-1', description: 'untitled' }]);
   });
 
   it('createFocusPoints sends correct body', async () => {
@@ -80,7 +80,7 @@ describe('ApiClient', () => {
     globalThis.fetch = fetchMock;
 
     const client = new ApiClient();
-    const scanOptions = { mode: 'fast' };
+    const scanOptions = { interval: 1 };
     const result = await client.startScan('vid-abc', scanOptions);
 
     const callArgs = fetchMock.mock.calls[0];

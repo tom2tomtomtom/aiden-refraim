@@ -6,16 +6,7 @@ import { ProcessingDialog } from '../components/ProcessingDialog';
 import { Toast } from '../components/Toast';
 import { useApi } from '../contexts/ApiContext';
 import { useAuth } from '../contexts/AuthContext';
-
-interface Video {
-  id: string;
-  title: string | null;
-  description: string | null;
-  original_url: string;
-  status: string;
-  platform_outputs: Record<string, any> | null;
-  created_at: string;
-}
+import type { Video } from '../api';
 
 export function Dashboard() {
   const { user } = useAuth();

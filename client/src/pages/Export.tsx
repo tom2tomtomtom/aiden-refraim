@@ -1,9 +1,8 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useVideo } from '../contexts/VideoContext';
 import { useFocusPoints } from '../contexts/FocusPointsContext';
 import VideoExporter from '../components/video/VideoExporter';
-import { OUTPUT_FORMATS } from '../types/video';
 import { Play, Pause, Eye } from 'lucide-react';
 
 const UNIQUE_RATIOS = [
@@ -13,8 +12,8 @@ const UNIQUE_RATIOS = [
   { label: '16:9', w: 16, h: 9, desc: 'YouTube / Landscape' },
 ];
 
-function ReframePreview({ ratioW, ratioH, label }: { ratioW: number; ratioH: number; label: string }) {
-  const { videoUrl, videoElementRef, isPlaying, currentTime, setCurrentTime, setIsPlaying } = useVideo();
+function ReframePreview({ ratioW, ratioH }: { ratioW: number; ratioH: number; label: string }) {
+  const { videoUrl, videoElementRef, isPlaying, setIsPlaying } = useVideo();
   const { activeFocusPoint } = useFocusPoints();
   const previewRef = useRef<HTMLVideoElement>(null);
 
@@ -97,7 +96,7 @@ export default function ExportPage() {
   const { loadVideo, videoUrl, isLoading, error: videoError, videoElementRef, isPlaying, setIsPlaying, setCurrentTime, duration } = useVideo();
   const { loadFocusPoints, focusPoints } = useFocusPoints();
   const [activeRatio, setActiveRatio] = useState(UNIQUE_RATIOS[0]);
-  const mainVideoRef = useRef<HTMLVideoElement>(null);
+  const mainVideoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     if (paramVideoId && !videoUrl) {
@@ -108,7 +107,7 @@ export default function ExportPage() {
 
   // Hidden main video for context sync
   const videoRefCallback = useCallback((el: HTMLVideoElement | null) => {
-    (videoElementRef as React.MutableRefObject<HTMLVideoElement | null>).current = el;
+    videoElementRef.current = el;
     mainVideoRef.current = el;
   }, [videoElementRef]);
 

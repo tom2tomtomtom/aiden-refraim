@@ -15,7 +15,7 @@ interface VideoContextType {
   setIsPlaying: (p: boolean) => void;
   setDuration: (d: number) => void;
   loadVideo: (id: string) => Promise<void>;
-  videoElementRef: React.RefObject<HTMLVideoElement | null>;
+  videoElementRef: React.MutableRefObject<HTMLVideoElement | null>;
 }
 
 const VideoContext = createContext<VideoContextType | undefined>(undefined);

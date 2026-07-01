@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useVideo } from '../contexts/VideoContext';
 import { useFocusPoints } from '../contexts/FocusPointsContext';

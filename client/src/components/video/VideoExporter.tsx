@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useVideo } from '../../contexts/VideoContext';
 import { useFocusPoints } from '../../contexts/FocusPointsContext';
 import { useApi } from '../../contexts/ApiContext';

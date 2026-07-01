@@ -6,8 +6,7 @@ import VideoScannerService from '../../services/VideoScannerService';
 import type { Subject as ScannerSubject } from '../../services/VideoScannerService';
 import type { Subject, ScanOptions, ScanStatus } from '../../types/scan';
 import type { FocusPointCreate } from '../../types/focusPoint';
-import { segmentPositionsToFocusPoints } from '../../services/FocusInterpolationService';
-import { Sparkles, Play, Pause, PenTool, X, Star, ChevronDown, ChevronRight, BookOpen, ShieldCheck, AlertTriangle, XCircle, Wrench, RefreshCw, SlidersHorizontal, Move, Maximize2, Type } from 'lucide-react';
+import { Sparkles, Play, Pause, PenTool, X, Star, BookOpen, ShieldCheck, AlertTriangle, Wrench, RefreshCw, SlidersHorizontal, Move, Maximize2, Type } from 'lucide-react';
 
 const PLATFORM_ASPECT_RATIOS: Record<string, [number, number]> = {
   'tiktok': [9, 16],
@@ -292,7 +291,6 @@ export default function FocusSelector() {
 
   // Story brief
   const [storyBrief, setStoryBrief] = useState('');
-  const [briefExpanded, setBriefExpanded] = useState(false);
 
   // Key frames captured during scan
   const [keyFrames, setKeyFrames] = useState<KeyFrame[]>([]);
@@ -570,53 +568,6 @@ export default function FocusSelector() {
     setAcceptedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
   }, []);
 
-  const acceptAll = useCallback(() => {
-    setAcceptedIds(new Set(detectedSubjects.map(s => s.id)));
-    setRejectedIds(new Set());
-  }, [detectedSubjects]);
-
-  const rejectAll = useCallback(() => {
-    setRejectedIds(new Set(detectedSubjects.map(s => s.id)));
-    setAcceptedIds(new Set());
-  }, [detectedSubjects]);
-
-  const finalize = useCallback(async () => {
-    setScanStatus('finalizing');
-    const accepted = detectedSubjects.filter(s => acceptedIds.has(s.id));
-
-    // Create segmented focus points with position interpolation
-    const allFocusPoints: FocusPointCreate[] = [];
-
-    for (const subject of accepted) {
-      const segments = segmentPositionsToFocusPoints(
-        subject.positions,
-        subject.class || 'detected_region',
-        2.0
-      );
-
-      for (const seg of segments) {
-        allFocusPoints.push({
-          time_start: seg.time_start,
-          time_end: seg.time_end,
-          x: seg.x,
-          y: seg.y,
-          width: seg.width,
-          height: seg.height,
-          description: seg.description,
-          source: seg.source,
-        });
-      }
-    }
-
-    if (allFocusPoints.length > 0) {
-      await addFocusPointsBatch(allFocusPoints);
-    }
-
-    setScanStatus('idle');
-    setDetectedSubjects([]);
-    setAcceptedIds(new Set());
-    setRejectedIds(new Set());
-  }, [detectedSubjects, acceptedIds, addFocusPointsBatch]);
 
   const cancelReview = useCallback(() => {
     setScanStatus('idle');
@@ -1617,7 +1568,7 @@ export default function FocusSelector() {
               {duration > 0 && (
                 <div className="mb-2">
                   <div className="relative w-full h-3 bg-black-deep border border-border-subtle">
-                    {focusPoints.map((fp, i) => {
+                    {focusPoints.map((fp) => {
                       const left = (fp.time_start / duration) * 100;
                       const width = Math.max(0.5, ((fp.time_end - fp.time_start) / duration) * 100);
                       return (
