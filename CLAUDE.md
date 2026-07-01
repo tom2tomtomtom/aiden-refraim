@@ -19,9 +19,9 @@ refrAIm is the quiet efficient post assistant who cuts what you need without ask
 - Domain: `refraim.aiden.services`
 - Repo: `tom2tomtomtom/aiden-refraim`
 - Local: `/Users/tommyhyde/aiden-refraim`
-- Split: Express server (Node + FFmpeg) on Railway; React client (Vite + Supabase) on Netlify
-- **Deploy server**: `railway up --detach` from `/Users/tommyhyde/aiden-refraim/`. **This is one of the few apps where `railway up` is correct.** Other hub apps use `git push`.
-- **Deploy client**: Netlify auto-deploys on git push.
+- **Single Railway service.** The Dockerfile builds the React client (`vite build`) AND the Express server (`tsc`), and the Node server serves the built client. Prod `refraim.aiden.services` is Railway (`server: railway-hikari`), same-origin `/api`. It is NOT served by Netlify.
+- **Deploy (client + server): `railway up --detach` from `/Users/tommyhyde/aiden-refraim/`.** One of the few hub apps where `railway up` is correct. Verified 2026-07-01: linked to Railway project/service `aiden-refraim` (the old geoff-agent mislink is resolved).
+- **Netlify `refraim-app` is legacy/orphaned for prod** — the custom domain resolves to Railway, so `netlify deploy` does NOT reach users. Do not rely on it.
 
 ## 5. Tech stack
 
@@ -111,23 +111,20 @@ A safety guard is in place at `videoController.ts` (search for `RFM-A-009 GUARD`
 - `SENTRY_DSN`
 
 **Client (Vite build `.env.production`):**
-- `VITE_API_URL` — `/api` (Netlify reverse-proxied)
+- `VITE_API_URL` — `/api` (same-origin on the Railway service; the client and API are served from the same host)
 - `VITE_SUPABASE_URL` — matches server
 - `VITE_SUPABASE_ANON_KEY` — matches server
 
 ## 10. Deployment
 
-**Server:** Railway
+**Prod = one Railway service** (serves both the client and `/api` at `refraim.aiden.services`, same-origin).
 - Config: `railway.json` (builder: DOCKERFILE, healthcheckPath: `/api/health`)
-- Dockerfile installs ffmpeg, builds client (Vite), builds server (tsc), runs `node server/dist/server.js`
-- Deploy: `cd /Users/tommyhyde/aiden-refraim && railway up --detach`
+- Dockerfile: installs ffmpeg, builds the client with `cd client && npx vite build` (only `vite build`, NOT `tsc`), builds the server with `cd server && npx tsc`, then `node server/dist/server.js` serves the built client + API.
+- Deploy: `cd /Users/tommyhyde/aiden-refraim && railway up --detach`. Verified live 2026-07-01.
 
-**Client:** Netlify
-- Auto-deploy on push to `main`
-- Build: `npm run build` (tsc -b + vite build from `/client`)
-- API reverse proxy: `/_netlify/functions/api` → `https://refraim.railway.app/api` (check `netlify.toml` or Netlify Functions UI)
+**Client build note:** `npm run build` = `tsc -b && vite build` is STRICT (it used to fail on pre-existing TS errors; fixed 2026-07-01). Railway only runs `vite build`, so it built regardless. Only run the strict `npm run build` for local/CI type-safety, not for the prod deploy.
 
-**Netlify → Railway proxy:** configured via `netlify.toml` redirect `/_netlify/functions/api/* → https://refraim.railway.app/api/:splat`. If this breaks, exports fail silently on the client with no network error — check `netlify.toml` first.
+**Legacy Netlify (orphaned):** the `refraim-app` Netlify site still exists, but the custom domain resolves to Railway, so Netlify deploys do NOT reach users. The old `netlify.toml` `/_netlify/functions/api` reverse-proxy is moot — the API is same-origin on Railway. Ignore Netlify for prod.
 
 ## 11. Known gotchas + incidents
 
