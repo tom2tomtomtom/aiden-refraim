@@ -111,6 +111,17 @@ export class DatabaseService {
   }
 
   static async deleteVideo(id: string): Promise<void> {
+    // Remove dependent processing_jobs first. The FK
+    // processing_jobs_video_id_fkey has no ON DELETE CASCADE, so deleting a
+    // video that has jobs (every exported video does) otherwise fails with
+    // Postgres error 23503 and surfaces to the user as a 500.
+    const { error: jobsError } = await supabase
+      .from('processing_jobs')
+      .delete()
+      .eq('video_id', id);
+
+    if (jobsError) throw jobsError;
+
     const { error } = await supabase
       .from('videos')
       .delete()
