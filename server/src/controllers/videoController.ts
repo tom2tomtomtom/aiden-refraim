@@ -1,10 +1,11 @@
 import { Request, Response } from 'express';
+import { randomUUID } from 'node:crypto';
 import fs from 'fs';
 import { processVideoForPlatforms } from '../services/videoProcessingService';
 import { StorageService } from '../services/storageService';
 import { DatabaseService } from '../services/databaseService';
 import { supabase } from '../config/supabase';
-import { checkTokens, deductTokens } from '../lib/gateway-tokens';
+import { checkTokens, deductTokens, recordCostEvent } from '../lib/gateway-tokens';
 import { reserveExport, refundExport } from '../lib/quota';
 
 const VALID_PLATFORMS = [
@@ -321,20 +322,50 @@ export const processVideo = async (req: Request, res: Response) => {
       user_id: user.id
     });
 
+    const requestId = randomUUID();
+    const processingStartedAt = Date.now();
+
     // Start processing asynchronously; deduct tokens only on success.
     // We do NOT refund the Stripe plan quota on failure. The work was
     // attempted and the FFmpeg cost was paid. If the failure is a hard
     // infra error (quota-gate followed by a server crash), the user can
     // retry within the month cap.
     processVideoForPlatforms(video, platforms)
-      .then(() => {
+      .then(async () => {
         if (process.env.AIDEN_SERVICE_KEY) {
-          deductTokens(user.id, 'refraim', 'video_export').catch((err: Error) =>
-            console.error('[gateway-tokens] Deduct error:', err)
-          );
+          const computeSeconds = (Date.now() - processingStartedAt) / 1000;
+          await recordCostEvent({
+            userId: user.id,
+            requestId,
+            idempotencyKey: `railway:${requestId}`,
+            providerTaskId: processingJob.id,
+            status: 'unallocated',
+            computeSeconds,
+            metadata: {
+              reason: 'railway_resource_usage_requires_project_cost_allocation',
+              platformCount: platforms.length,
+            },
+          });
+          await deductTokens(user.id, 'refraim', 'video_export', requestId);
         }
       })
-      .catch(console.error);
+      .catch(async (error) => {
+        console.error(error);
+        if (process.env.AIDEN_SERVICE_KEY) {
+          await recordCostEvent({
+            userId: user.id,
+            requestId,
+            idempotencyKey: `railway:${requestId}:failed`,
+            providerTaskId: processingJob.id,
+            status: 'failed',
+            computeSeconds: (Date.now() - processingStartedAt) / 1000,
+            metadata: {
+              reason: 'video_processing_failed',
+              platformCount: platforms.length,
+            },
+          });
+        }
+      });
 
     res.json({
       ...processingJob,

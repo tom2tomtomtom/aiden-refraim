@@ -27,6 +27,9 @@ interface DeductResult {
   error?: string
   required?: number
   balance?: number
+  transactionId?: string
+  requestId?: string
+  idempotent?: boolean
 }
 
 function getHeaders(userId: string): Record<string, string> {
@@ -69,13 +72,14 @@ export async function checkTokens(
 export async function deductTokens(
   userId: string,
   product: string,
-  operation: string
+  operation: string,
+  requestId?: string,
 ): Promise<DeductResult> {
   try {
     const res = await fetch(`${GATEWAY_URL}/api/tokens/deduct`, {
       method: 'POST',
       headers: getHeaders(userId),
-      body: JSON.stringify({ product, operation }),
+      body: JSON.stringify({ product, operation, requestId }),
     })
 
     if (!res.ok && res.status === 402) {
@@ -93,5 +97,42 @@ export async function deductTokens(
     console.error('[gateway-tokens] Deduct threw:', err)
     // Fail closed: don't silently succeed on network failure.
     return { success: false, error: 'gateway_unreachable' }
+  }
+}
+
+export async function recordCostEvent(event: {
+  userId: string
+  requestId: string
+  idempotencyKey: string
+  providerTaskId?: string
+  status: 'failed' | 'unallocated'
+  computeSeconds: number
+  metadata?: Record<string, unknown>
+}): Promise<boolean> {
+  try {
+    const res = await fetch(`${GATEWAY_URL}/api/cost-events`, {
+      method: 'POST',
+      headers: getHeaders(event.userId),
+      body: JSON.stringify({
+        idempotencyKey: event.idempotencyKey,
+        requestId: event.requestId,
+        product: 'refraim',
+        operation: 'video_export',
+        provider: 'railway',
+        providerAccountAlias: 'aiden-refraim',
+        providerTaskId: event.providerTaskId,
+        status: event.status,
+        computeSeconds: event.computeSeconds,
+        metadata: event.metadata,
+      }),
+    })
+    if (!res.ok) {
+      console.error(`[gateway-costs] Record failed: ${res.status}`)
+      return false
+    }
+    return true
+  } catch (err) {
+    console.error('[gateway-costs] Record threw:', err)
+    return false
   }
 }
