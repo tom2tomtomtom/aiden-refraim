@@ -9,6 +9,12 @@ interface PlanState {
   exports_this_month: number;
   exports_limit: number; // -1 = unlimited
   exports_remaining: number | null; // null = unlimited
+  // Which entitlement path the NEXT export uses (UXA F-010): allowance,
+  // Gateway-token fallback, or blocked. Exactly one path is ever consumed.
+  next_export?: {
+    path: 'plan_quota' | 'gateway_tokens' | 'blocked';
+    token_cost: number;
+  };
 }
 
 export default function VideoExporter() {
@@ -173,7 +179,12 @@ export default function VideoExporter() {
     ? Math.round(Object.values(exportProgress).reduce((sum, p) => sum + (p.progress || 0), 0) / Object.values(exportProgress).length)
     : 0;
 
-  const quotaExhausted = plan != null && plan.exports_limit !== -1 && plan.exports_remaining !== null && plan.exports_remaining <= 0;
+  const allowanceExhausted = plan != null && plan.exports_limit !== -1 && plan.exports_remaining !== null && plan.exports_remaining <= 0;
+  // Tokens are a legitimate billing path once the allowance is used —
+  // exporting is only blocked when NO path remains (UXA F-010).
+  const tokenFallback = allowanceExhausted && plan?.next_export?.path === 'gateway_tokens';
+  const quotaExhausted = allowanceExhausted && !tokenFallback;
+  const tokenCostPerExport = plan?.next_export?.token_cost ?? 2;
 
   return (
     <div className="bg-black-card p-6 border-2 border-border-subtle">
@@ -191,7 +202,15 @@ export default function VideoExporter() {
               <span className={quotaExhausted ? 'text-red-hot font-bold' : 'text-white-full font-bold'}>
                 {plan.exports_remaining ?? Math.max(0, plan.exports_limit - plan.exports_this_month)}
               </span>{' '}
-              of {plan.exports_limit} exports left this month
+              of {plan.exports_limit} free exports left this month
+              {!allowanceExhausted && (
+                <span className="text-white-dim"> — this export uses 1, no tokens.</span>
+              )}
+              {tokenFallback && (
+                <span className="text-orange-accent">
+                  {' '}Free exports used — each export now costs {tokenCostPerExport} Gateway tokens.
+                </span>
+              )}
               {quotaExhausted && (
                 <span className="text-red-hot"> Upgrade to export more.</span>
               )}
@@ -344,6 +363,8 @@ export default function VideoExporter() {
             ? 'Opening billing...'
             : quotaExhausted
             ? 'Upgrade to export more'
+            : tokenFallback
+            ? `Export ${selectedPlatforms.length} Platform${selectedPlatforms.length !== 1 ? 's' : ''} — ${tokenCostPerExport} tokens`
             : `Export ${selectedPlatforms.length} Platform${selectedPlatforms.length !== 1 ? 's' : ''}`}
         </button>
       )}

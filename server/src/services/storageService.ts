@@ -7,6 +7,12 @@ import axios from 'axios';
 
 const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'videos';
 
+// UXA-20260717 F-012: exports can carry pre-release/NDA client creative, so
+// the bucket is PRIVATE and every read goes through a short-lived signed URL.
+// Stored rows keep the public-form URL as a stable path identifier only —
+// fetching it raw returns 401/403 by design.
+const SIGNED_URL_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
+
 export class StorageService {
   static async ensureBucketExists(): Promise<void> {
     try {
@@ -17,16 +23,16 @@ export class StorageService {
       const bucketExists = buckets.some(b => b.name === STORAGE_BUCKET);
       if (!bucketExists) {
         console.log(`Creating storage bucket: ${STORAGE_BUCKET}`);
-        const { data, error: createError } = await supabase.storage.createBucket(STORAGE_BUCKET, {
-          public: true,
+        const { error: createError } = await supabase.storage.createBucket(STORAGE_BUCKET, {
+          public: false,
           allowedMimeTypes: ['video/mp4', 'video/quicktime', 'video/x-msvideo']
         });
         if (createError) throw createError;
       }
 
-      // Update bucket to be public
+      // Enforce private access; reads use signed URLs (F-012).
       const { error: updateError } = await supabase.storage.updateBucket(STORAGE_BUCKET, {
-        public: true,
+        public: false,
         allowedMimeTypes: ['video/mp4', 'video/quicktime', 'video/x-msvideo']
       });
       if (updateError) throw updateError;
@@ -35,6 +41,78 @@ export class StorageService {
       console.error('Error ensuring bucket exists:', error);
       throw error;
     }
+  }
+
+  /**
+   * Extract the object path from any URL form this bucket has ever issued
+   * (public, signed, or authenticated). Returns null for foreign URLs.
+   */
+  static pathFromUrl(url: string): string | null {
+    for (const form of ['public', 'sign', 'authenticated']) {
+      const marker = `/storage/v1/object/${form}/${STORAGE_BUCKET}/`;
+      const idx = url.indexOf(marker);
+      if (idx !== -1) {
+        const p = url.slice(idx + marker.length).split('?')[0];
+        return p || null;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Mint a short-lived signed URL for a stored object. Accepts either a raw
+   * object path or any URL form previously issued for this bucket. Returns
+   * null when the input isn't ours or signing fails (callers keep the
+   * original value and the read fails visibly rather than silently).
+   */
+  static async getSignedUrl(
+    urlOrPath: string,
+    expiresIn: number = SIGNED_URL_TTL_SECONDS,
+  ): Promise<string | null> {
+    // Full URLs must belong to our bucket; anything else (a foreign host,
+    // an already-external asset) is not ours to sign. Bare object paths are
+    // signed directly.
+    const isUrl = /^https?:\/\//i.test(urlOrPath);
+    const path = isUrl ? this.pathFromUrl(urlOrPath) : urlOrPath;
+    if (!path) return null;
+
+    const { data, error } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .createSignedUrl(path, expiresIn);
+    if (error || !data?.signedUrl) {
+      console.error('[storage] createSignedUrl failed:', path, error);
+      return null;
+    }
+    return data.signedUrl;
+  }
+
+  /**
+   * Best-effort re-sign of every storage URL on a video row (original_url +
+   * platform_outputs[*].url) for API responses. Leaves foreign URLs and
+   * unsignable values untouched.
+   */
+  static async signVideoRecord<T extends {
+    original_url?: string | null;
+    platform_outputs?: Record<string, { url?: string } & Record<string, unknown>> | null;
+  }>(video: T): Promise<T> {
+    const out: T = { ...video };
+    if (out.original_url) {
+      const signed = await this.getSignedUrl(out.original_url);
+      if (signed) out.original_url = signed;
+    }
+    if (out.platform_outputs) {
+      const entries = await Promise.all(
+        Object.entries(out.platform_outputs).map(async ([platform, output]) => {
+          if (output?.url) {
+            const signed = await this.getSignedUrl(output.url);
+            if (signed) return [platform, { ...output, url: signed }] as const;
+          }
+          return [platform, output] as const;
+        }),
+      );
+      out.platform_outputs = Object.fromEntries(entries);
+    }
+    return out;
   }
 
   static async uploadVideo(filePath: string, fileName: string): Promise<string> {
@@ -214,9 +292,18 @@ export class StorageService {
 
   static async downloadVideo(videoUrl: string, outputPath: string): Promise<void> {
     try {
+      // Our own bucket is private (F-012): a stored public-form URL will 401
+      // if fetched raw, so mint a fresh signed URL first. Foreign URLs are
+      // fetched as-is.
+      const ownPath = this.pathFromUrl(videoUrl);
+      const fetchUrl = ownPath ? await this.getSignedUrl(ownPath) : videoUrl;
+      if (!fetchUrl) {
+        throw new Error(`Could not sign storage URL for download: ${videoUrl}`);
+      }
+
       const response = await axios({
         method: 'GET',
-        url: videoUrl,
+        url: fetchUrl,
         responseType: 'stream',
       });
 
@@ -236,16 +323,12 @@ export class StorageService {
       // interpolation, which doesn't interpolate inside a `/regex/` literal.
       // It matched the string "${STORAGE_BUCKET}", so every delete silently
       // failed with "Invalid video URL" and storage files were orphaned.
-      const marker = `/storage/v1/object/public/${STORAGE_BUCKET}/`;
-      const markerIdx = videoUrl.indexOf(marker);
-      if (markerIdx === -1) {
-        console.warn(`[storage] deleteVideo: URL does not look like a ${STORAGE_BUCKET} object:`, videoUrl);
-        return;
-      }
-
-      const filePath = videoUrl.slice(markerIdx + marker.length).split('?')[0];
+      // Accept every URL form this bucket has issued (public, signed,
+      // authenticated) — rows written before and after the F-012 privacy
+      // change must both delete cleanly.
+      const filePath = this.pathFromUrl(videoUrl);
       if (!filePath) {
-        console.warn('[storage] deleteVideo: empty path after bucket marker:', videoUrl);
+        console.warn(`[storage] deleteVideo: URL does not look like a ${STORAGE_BUCKET} object:`, videoUrl);
         return;
       }
 

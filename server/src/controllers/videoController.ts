@@ -6,8 +6,8 @@ import { StorageService } from '../services/storageService';
 import { DatabaseService } from '../services/databaseService';
 import { supabase } from '../config/supabase';
 import { checkTokens, deductTokens, recordCostEvent } from '../lib/gateway-tokens';
-import { reserveExport, refundExport } from '../lib/quota';
-import { shouldChargeGatewayTokens } from '../lib/billing-path';
+import { getQuotaState, reserveExport } from '../lib/quota';
+import { resolveBillingPath } from '../lib/billing-path';
 
 const VALID_PLATFORMS = [
   'instagram-story',
@@ -112,7 +112,7 @@ export const uploadVideo = async (req: Request, res: Response) => {
       platforms: video.platforms,
     });
 
-    res.status(201).json(video);
+    res.status(201).json(await StorageService.signVideoRecord(video));
   } catch (error) {
     safeUnlink(tempPath);
     console.error('Error in uploadVideo:', {
@@ -154,7 +154,7 @@ export const getVideoById = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    res.json(video);
+    res.json(await StorageService.signVideoRecord(video));
   } catch (error) {
     console.error('Error in getVideoById:', error);
     res.status(500).json({ error: 'Error fetching video' });
@@ -225,16 +225,17 @@ export const getVideoStatus = async (req: Request, res: Response) => {
       platforms[platform] = {
         status: raw?.status ?? 'processing',
         progress: done || errored ? 100 : aggregateProgress,
-        url: raw?.url,
+        url: raw?.url ? (await StorageService.getSignedUrl(raw.url)) ?? raw.url : raw?.url,
         error: raw?.error,
       };
     }
 
+    const signedRecord = await StorageService.signVideoRecord({ platform_outputs: platformOutputs });
     res.json({
       status: video.status,
       progress: aggregateProgress,
       platforms,
-      platformOutputs, // kept for any external callers on the old shape
+      platformOutputs: signedRecord.platform_outputs, // kept for any external callers on the old shape
     });
   } catch (error) {
     console.error('Error in getVideoStatus:', error);
@@ -274,37 +275,50 @@ export const processVideo = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    // Gate on standalone Stripe plan quota. `reserveExport` returns the
-    // post-increment state on success or null when the monthly cap is
-    // hit. Unlimited plans (Pro / Agency) always succeed.
-    const reserved = await reserveExport(user.id);
-    if (!reserved) {
+    // Resolve exactly ONE billing path for this export (UXA F-010):
+    // remaining plan allowance (free or paid) is consumed first and costs
+    // no tokens; an exhausted free allowance falls back to Gateway tokens;
+    // otherwise the export is blocked.
+    const quotaState = await getQuotaState(user.id);
+    const serviceKeyConfigured = Boolean(process.env.AIDEN_SERVICE_KEY);
+    const allowanceRemaining = Number.isFinite(quotaState.remaining)
+      ? (quotaState.remaining as number)
+      : Number.POSITIVE_INFINITY;
+    let billingPath = resolveBillingPath(
+      quotaState.plan,
+      allowanceRemaining,
+      serviceKeyConfigured,
+    );
+
+    let reserved = quotaState;
+    if (billingPath === 'plan_quota') {
+      const afterReserve = await reserveExport(user.id);
+      if (afterReserve) {
+        reserved = afterReserve;
+      } else {
+        // Lost a race for the last allowance slot; re-resolve with 0 left.
+        billingPath = resolveBillingPath(quotaState.plan, 0, serviceKeyConfigured);
+      }
+    }
+
+    if (billingPath === 'blocked') {
       return res.status(402).json({
         error: 'Monthly export limit reached',
-        message: 'You have used your free export allowance for this month. Upgrade your plan to keep exporting.',
+        message: 'You have used your export allowance for this month. Upgrade your plan to keep exporting.',
         upgradeUrl: '/#/billing',
       });
     }
 
-    // Paid Stripe subscribers consume only their included plan quota.
-    // Free users consume Gateway tokens, while the free quota remains an
-    // abuse ceiling. This prevents one export from charging both systems.
-    const chargeGatewayTokens = shouldChargeGatewayTokens(
-      reserved.plan,
-      Boolean(process.env.AIDEN_SERVICE_KEY),
-    );
+    const chargeGatewayTokens = billingPath === 'gateway_tokens';
     if (chargeGatewayTokens) {
       const tokenCheck = await checkTokens(user.id, 'refraim', 'video_export');
       if (!tokenCheck.allowed) {
-        // Quota was already reserved; refund it so the user doesn't burn a
-        // Stripe export allowance on a token-side failure.
-        await refundExport(user.id).catch((err) =>
-          console.error('[quota] Refund after token check failed:', err)
-        );
         return res.status(402).json({
           error: 'Insufficient tokens',
+          message: 'Your free export allowance is used and your token balance is too low for this export.',
           required: tokenCheck.required,
           balance: tokenCheck.balance,
+          upgradeUrl: '/#/billing',
         });
       }
     }
@@ -373,6 +387,10 @@ export const processVideo = async (req: Request, res: Response) => {
         limit: reserved.limit,
         remaining: Number.isFinite(reserved.remaining) ? reserved.remaining : null,
       },
+      billing: {
+        path: billingPath,
+        tokenCost: chargeGatewayTokens ? 2 : 0,
+      },
     });
   } catch (error) {
     console.error('Error in processVideo:', error);
@@ -388,7 +406,7 @@ export const getUserVideos = async (req: Request, res: Response) => {
     }
 
     const videos = await DatabaseService.getUserVideos(user.id);
-    res.json(videos);
+    res.json(await Promise.all(videos.map((v: any) => StorageService.signVideoRecord(v))));
   } catch (error) {
     console.error('Error in getUserVideos:', error);
     res.status(500).json({ error: 'Error fetching user videos' });
@@ -463,8 +481,9 @@ export const getVideoOutput = async (req: Request, res: Response) => {
       return res.status(404).json({ error: `No output found for platform: ${platform}` });
     }
 
+    const signedUrl = await StorageService.getSignedUrl(outputs[platform].url);
     return res.json({
-      url: outputs[platform].url,
+      url: signedUrl ?? outputs[platform].url,
       platform,
       format: outputs[platform].format || platform,
       file_size: outputs[platform].file_size || 0,

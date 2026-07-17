@@ -2,6 +2,7 @@ import { supabase } from '../config/supabase';
 import path from 'path';
 import fs from 'fs';
 import { analyzeVideo } from './videoAnalysisService';
+import { StorageService } from './storageService';
 import { OUTPUT_FORMATS, OutputFormat } from '../config/outputFormats';
 import { FFmpegService, FocusPoint } from './ffmpegService';
 import { defaultConfig, VideoProcessingConfig } from '../config/videoProcessing';
@@ -122,8 +123,13 @@ class BasicVideoProcessor implements VideoProcessor {
         fs.mkdirSync(tempDir, { recursive: true });
       }
 
+      // The bucket is private (F-012): mint a signed URL for FFmpeg/analysis
+      // reads. The stored original_url is only a path identifier.
+      const sourceUrl =
+        (await StorageService.getSignedUrl(video.original_url)) ?? video.original_url;
+
       // Analyze video to detect subjects and important regions
-      const analysisResult = await this.analyzer.analyze(video.original_url);
+      const analysisResult = await this.analyzer.analyze(sourceUrl);
       await this.updateVideoStatus(video.id, 'processing', undefined, 20);
 
       // Store analysis results
@@ -148,7 +154,7 @@ class BasicVideoProcessor implements VideoProcessor {
           // Process video according to platform requirements
           const outputPath = path.join(this.config.processingOptions.tempDir, `${video.id}-${platform}.mp4`);
           const outputUrl = await FFmpegService.processVideo(
-            video.original_url,
+            sourceUrl,
             outputPath,
             {
               width: format.width,
@@ -301,8 +307,12 @@ class BasicVideoProcessor implements VideoProcessor {
 
       await this.updateVideoStatus(video.id, 'processing', undefined, 10);
 
+      // Private bucket (F-012): sign once, use for every read in this run.
+      const sourceUrl =
+        (await StorageService.getSignedUrl(video.original_url)) ?? video.original_url;
+
       // Analyze video for metadata (still useful for storing analysis)
-      const analysisResult = await this.analyzer.analyze(video.original_url);
+      const analysisResult = await this.analyzer.analyze(sourceUrl);
       await this.updateVideoStatus(video.id, 'processing', undefined, 20);
 
       // Store analysis results
@@ -332,7 +342,7 @@ class BasicVideoProcessor implements VideoProcessor {
           if (typedFocusPoints.length > 0) {
             // Use new segment-based processing with focus points
             await FFmpegService.processVideoWithSegments(
-              video.original_url,
+              sourceUrl,
               outputPath,
               {
                 width: format.width,
@@ -346,7 +356,7 @@ class BasicVideoProcessor implements VideoProcessor {
             // Fall back to original processing when no focus points exist
             const fallbackRegion = analysisResult.focusRegion || { x: 0, y: 0, width: 0, height: 0 };
             await FFmpegService.processVideo(
-              video.original_url,
+              sourceUrl,
               outputPath,
               {
                 width: format.width,

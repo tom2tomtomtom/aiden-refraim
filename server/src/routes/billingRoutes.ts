@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/auth';
 import { stripe, PLANS } from '../config/stripe';
 import { supabase } from '../config/supabase';
 import { getQuotaState } from '../lib/quota';
+import { resolveBillingPath } from '../lib/billing-path';
 
 const router = Router();
 
@@ -18,6 +19,15 @@ router.get('/plan', requireAuth as any, async (req: Request, res: Response) => {
       .eq('user_id', userId)
       .maybeSingle();
 
+    // Pre-spend transparency (UXA F-010): tell the client which entitlement
+    // path the NEXT export will use and what it costs, so the price is on
+    // screen before the user commits.
+    const nextPath = resolveBillingPath(
+      quota.plan,
+      Number.isFinite(quota.remaining) ? (quota.remaining as number) : Number.POSITIVE_INFINITY,
+      Boolean(process.env.AIDEN_SERVICE_KEY),
+    );
+
     return res.json({
       plan: quota.plan,
       exports_this_month: quota.used,
@@ -26,6 +36,10 @@ router.get('/plan', requireAuth as any, async (req: Request, res: Response) => {
       exports_resets_at: quota.resetsAt,
       stripe_customer_id: billing?.stripe_customer_id || null,
       subscription_status: billing?.subscription_status || 'inactive',
+      next_export: {
+        path: nextPath,
+        token_cost: nextPath === 'gateway_tokens' ? 2 : 0,
+      },
     });
   } catch (error) {
     console.error('Error getting plan:', error);
