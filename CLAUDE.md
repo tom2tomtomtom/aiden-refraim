@@ -51,22 +51,14 @@ refrAIm is the quiet efficient post assistant who cuts what you need without ask
 
 (The earlier docs in this file claimed Supabase-direct auth — that referred to commit `b03620e` scaffolding which has since been completed. Code is now Gateway-SSO end to end.)
 
-## 7. Token billing — DUAL BILLING SURFACE (RFM-A-009)
+## 7. Token billing — plan-aware contract
 
-refrAIm currently has **two independent billing paths active in code** at `server/src/controllers/videoController.ts:processVideo`:
+refrAIm has two billing paths at `server/src/controllers/videoController.ts:processVideo`, but each export uses only one paid path:
 
-1. **Standalone Stripe plan quota** (always on): `reserveExport(user.id)` decrements the monthly Stripe-plan export count. Free = 3/mo, Starter $29 = 50/mo, Pro $79 + Agency $199 = unlimited.
-2. **Gateway token deduction** (on iff `AIDEN_SERVICE_KEY` is set): `checkTokens()` + `deductTokens('refraim', 'video_export')` deducts 2 Gateway tokens per export.
+1. **Paid Stripe subscribers:** `reserveExport(user.id)` decrements the monthly plan quota. Starter $29 = 50/mo, Pro $79 + Agency $199 = unlimited. Gateway tokens are not deducted.
+2. **Free users:** the free 3-export monthly ceiling remains active, and each export deducts 2 Gateway tokens when `AIDEN_SERVICE_KEY` is set.
 
-**The dual-billing risk:** in any environment where `AIDEN_SERVICE_KEY` is set on the refrAIm Railway service, a user with an active Stripe subscription is charged BOTH ways for every export — once via their monthly Stripe plan, once via their Gateway token balance. There is no plan-aware short-circuit between the two.
-
-**Required architecture decision (not yet made):**
-- (a) **Stripe-only:** Unset `AIDEN_SERVICE_KEY` in refrAIm production env and remove the Gateway deduction code path. refrAIm stays on standalone billing.
-- (b) **Gateway-only:** Replace the standalone Stripe plans with Gateway-token top-ups. Remove `reserveExport`/`refundExport` and the standalone-Stripe checkout routes.
-- (c) **Plan-aware:** Free / Starter users charge via Gateway tokens; Pro / Agency subscribers skip the Gateway deduction entirely.
-- (d) **Status-quo with explicit guard:** Document that the current production env intentionally leaves `AIDEN_SERVICE_KEY` unset on refrAIm; add a startup assertion that fails the deploy if both `AIDEN_SERVICE_KEY` and any Stripe plan are configured.
-
-A safety guard is in place at `videoController.ts` (search for `RFM-A-009 GUARD`) that logs a loud warning when both billing paths would charge the same user, so the leak is at least observable until the decision is made.
+Cost events are recorded for both billing paths. Their metadata identifies `gateway_tokens` or `stripe_plan`; only Gateway-token events are expected to link to a token deduction.
 
 `refraim.video_export = 2` is registered in Gateway's `TOKEN_COSTS` (`aiden-gateway/lib/tokens.ts`). The local Gateway client lives at `server/src/lib/gateway-tokens.ts`.
 

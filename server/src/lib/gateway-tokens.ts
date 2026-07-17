@@ -5,11 +5,10 @@
  * Uses X-Service-Key + X-User-Id headers for server-to-server auth.
  *
  * Fail-closed: if Gateway is unreachable, both checkTokens and deductTokens
- * deny the operation. Gateway token deductions are an optional secondary pool
- * on top of standalone Stripe billing (AIDEN_SERVICE_KEY must be set for them
- * to fire). Even as a secondary pool, silently skipping deductions on outage
- * leaks from the Gateway token balance users have purchased. Stripe plan quota
- * is a separate guard in videoController.ts and is unaffected by this.
+ * deny the operation. Gateway token deductions apply to free users only when
+ * AIDEN_SERVICE_KEY is set. Paid Stripe subscribers use their plan quota and
+ * skip the Gateway deduction. Silently skipping a free-user deduction on an
+ * outage would leak from the Gateway token balance the user purchased.
  */
 
 const GATEWAY_URL = process.env.GATEWAY_URL || 'https://www.aiden.services'

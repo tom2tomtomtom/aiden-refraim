@@ -96,7 +96,7 @@ refraim/
    STRIPE_PRICE_ID_AGENCY=price_...
    STRIPE_WEBHOOK_SECRET=whsec_...
 
-   # Optional — enables Gateway token deductions alongside Stripe (see CLAUDE.md §7)
+   # Optional — enables Gateway token deductions for free users (see CLAUDE.md §7)
    AIDEN_SERVICE_KEY=<gateway service key>
 
    # Other

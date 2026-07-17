@@ -7,6 +7,7 @@ import { DatabaseService } from '../services/databaseService';
 import { supabase } from '../config/supabase';
 import { checkTokens, deductTokens, recordCostEvent } from '../lib/gateway-tokens';
 import { reserveExport, refundExport } from '../lib/quota';
+import { shouldChargeGatewayTokens } from '../lib/billing-path';
 
 const VALID_PLATFORMS = [
   'instagram-story',
@@ -285,20 +286,14 @@ export const processVideo = async (req: Request, res: Response) => {
       });
     }
 
-    // RFM-A-009 GUARD: dual-billing observability.
-    // refrAIm has two billing paths active in production: the Stripe
-    // plan quota above, and the Gateway token deduction below (on iff
-    // AIDEN_SERVICE_KEY is set). Until the platform-level architecture
-    // decision is made (see CLAUDE.md §7), log loudly whenever both
-    // would charge the same user so the leak is visible in Railway logs
-    // and Sentry rather than silent.
-    if (process.env.AIDEN_SERVICE_KEY) {
-      console.warn(
-        '[RFM-A-009] Dual billing active. Stripe quota reserved AND Gateway token deduction will run for user %s. Architecture decision pending.',
-        user.id,
-      );
-
-      // Gate on Gateway token balance.
+    // Paid Stripe subscribers consume only their included plan quota.
+    // Free users consume Gateway tokens, while the free quota remains an
+    // abuse ceiling. This prevents one export from charging both systems.
+    const chargeGatewayTokens = shouldChargeGatewayTokens(
+      reserved.plan,
+      Boolean(process.env.AIDEN_SERVICE_KEY),
+    );
+    if (chargeGatewayTokens) {
       const tokenCheck = await checkTokens(user.id, 'refraim', 'video_export');
       if (!tokenCheck.allowed) {
         // Quota was already reserved; refund it so the user doesn't burn a
@@ -344,9 +339,12 @@ export const processVideo = async (req: Request, res: Response) => {
             metadata: {
               reason: 'railway_resource_usage_requires_project_cost_allocation',
               platformCount: platforms.length,
+              billingPath: chargeGatewayTokens ? 'gateway_tokens' : 'stripe_plan',
             },
           });
-          await deductTokens(user.id, 'refraim', 'video_export', requestId);
+          if (chargeGatewayTokens) {
+            await deductTokens(user.id, 'refraim', 'video_export', requestId);
+          }
         }
       })
       .catch(async (error) => {
@@ -362,6 +360,7 @@ export const processVideo = async (req: Request, res: Response) => {
             metadata: {
               reason: 'video_processing_failed',
               platformCount: platforms.length,
+              billingPath: chargeGatewayTokens ? 'gateway_tokens' : 'stripe_plan',
             },
           });
         }
