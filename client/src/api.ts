@@ -28,6 +28,7 @@ export interface ProcessingStatus {
   jobId?: string;
   error?: string;
   reconciling?: boolean;
+  balanceChanged?: boolean;
 }
 
 export interface Video {

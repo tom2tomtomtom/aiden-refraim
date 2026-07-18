@@ -102,7 +102,10 @@ export default function VideoExporter() {
 
     stopPolling();
     setIsExporting(false);
-    if (notifyBalance && entries.some(p => p.status === 'complete')) {
+    if (
+      notifyBalance
+      && (status.balanceChanged || entries.some(p => p.status === 'complete'))
+    ) {
       window.dispatchEvent(new Event('aiden:balance-refresh'));
     }
     refreshPlan();
