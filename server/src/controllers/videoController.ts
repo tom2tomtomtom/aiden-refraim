@@ -334,13 +334,13 @@ export const processVideo = async (req: Request, res: Response) => {
     const requestId = randomUUID();
     const processingStartedAt = Date.now();
 
-    // Start processing asynchronously; deduct tokens only on success.
+    // Start processing asynchronously; deduct tokens only when at least one
+    // output succeeds, and before that output becomes visible to the client.
     // We do NOT refund the Stripe plan quota on failure. The work was
     // attempted and the FFmpeg cost was paid. If the failure is a hard
     // infra error (quota-gate followed by a server crash), the user can
     // retry within the month cap.
-    processVideoForPlatforms(video, platforms)
-      .then(async () => {
+    processVideoForPlatforms(video, platforms, async () => {
         if (process.env.AIDEN_SERVICE_KEY) {
           const computeSeconds = (Date.now() - processingStartedAt) / 1000;
           await recordCostEvent({
@@ -357,8 +357,33 @@ export const processVideo = async (req: Request, res: Response) => {
             },
           });
           if (chargeGatewayTokens) {
-            await deductTokens(user.id, 'refraim', 'video_export', requestId);
+            const deduction = await deductTokens(
+              user.id,
+              'refraim',
+              'video_export',
+              requestId,
+            );
+            if (!deduction.success) {
+              throw new Error('Gateway token settlement failed');
+            }
           }
+        }
+      })
+      .then(async (outcome) => {
+        if (outcome.successfulOutputs === 0 && process.env.AIDEN_SERVICE_KEY) {
+          await recordCostEvent({
+            userId: user.id,
+            requestId,
+            idempotencyKey: `railway:${requestId}:failed`,
+            providerTaskId: processingJob.id,
+            status: 'failed',
+            computeSeconds: (Date.now() - processingStartedAt) / 1000,
+            metadata: {
+              reason: 'all_video_outputs_failed',
+              platformCount: platforms.length,
+              billingPath: chargeGatewayTokens ? 'gateway_tokens' : 'stripe_plan',
+            },
+          });
         }
       })
       .catch(async (error) => {

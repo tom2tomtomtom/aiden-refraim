@@ -35,13 +35,24 @@ interface Video {
 }
 
 export interface VideoProcessor {
-  process(video: Video, platforms: string[]): Promise<void>;
+  process(
+    video: Video,
+    platforms: string[],
+    beforePublish?: BeforePublish,
+  ): Promise<ProcessingOutcome>;
   processWithFocusPoints(
     video: Video,
     platforms: string[],
     options?: { letterbox?: boolean; quality?: 'low' | 'medium' | 'high' }
   ): Promise<void>;
 }
+
+export interface ProcessingOutcome {
+  successfulOutputs: number;
+  failedOutputs: number;
+}
+
+export type BeforePublish = (outcome: ProcessingOutcome) => Promise<void>;
 
 export interface VideoAnalyzer {
   analyze(videoUrl: string): Promise<VideoAnalysis>;
@@ -106,7 +117,11 @@ class BasicVideoProcessor implements VideoProcessor {
 
 
 
-  async process(video: Video, platforms: string[]): Promise<void> {
+  async process(
+    video: Video,
+    platforms: string[],
+    beforePublish?: BeforePublish,
+  ): Promise<ProcessingOutcome> {
     try {
       await this.updateVideoStatus(video.id, 'processing', undefined, 0);
 
@@ -200,6 +215,20 @@ class BasicVideoProcessor implements VideoProcessor {
       // Update progress to 90% before final update
       await this.updateVideoStatus(video.id, 'processing', undefined, 90);
 
+      const outcome: ProcessingOutcome = {
+        successfulOutputs: Object.values(platformOutputs)
+          .filter(output => output.status === 'complete').length,
+        failedOutputs: Object.values(platformOutputs)
+          .filter(output => output.status === 'error').length,
+      };
+
+      // A Gateway-token export is settled here, before completed output or a
+      // terminal state becomes visible to the polling client. All-failed
+      // runs skip settlement, so work that produced nothing is never charged.
+      if (outcome.successfulOutputs > 0 && beforePublish) {
+        await beforePublish(outcome);
+      }
+
       // Update video with processed outputs
       const { error: updateError3 } = await supabase
         .from('videos')
@@ -221,8 +250,16 @@ class BasicVideoProcessor implements VideoProcessor {
         ? 'failed'
         : 'completed';
       await this.updateVideoStatus(video.id, finalStatus, undefined, 100);
+      return outcome;
     } catch (error) {
       console.error('Video processing failed:', error);
+      const { error: videoUpdateError } = await supabase
+        .from('videos')
+        .update({ status: 'failed' })
+        .eq('id', video.id);
+      if (videoUpdateError) {
+        console.error('Failed to publish terminal video status:', videoUpdateError);
+      }
       await this.updateVideoStatus(
         video.id,
         'failed',
@@ -434,6 +471,10 @@ class BasicVideoProcessor implements VideoProcessor {
 export const videoProcessor = new BasicVideoProcessor();
 
 // Export processVideoForPlatforms as a wrapper for backward compatibility
-export const processVideoForPlatforms = (video: Video, platforms: string[]) => {
-  return videoProcessor.process(video, platforms);
+export const processVideoForPlatforms = (
+  video: Video,
+  platforms: string[],
+  beforePublish?: BeforePublish,
+) => {
+  return videoProcessor.process(video, platforms, beforePublish);
 };

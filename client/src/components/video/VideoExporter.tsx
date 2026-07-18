@@ -119,12 +119,18 @@ export default function VideoExporter() {
           const allDone = entries.length > 0 && entries.every(
             p => p.status === 'complete' || p.status === 'error'
           );
+          const hasSuccessfulOutput = entries.some(p => p.status === 'complete');
           if (allDone || status.status === 'completed' || status.status === 'failed') {
             if (pollIntervalRef.current) {
               clearInterval(pollIntervalRef.current);
               pollIntervalRef.current = null;
             }
             setIsExporting(false);
+            // Server terminal publication now happens after token settlement.
+            // Only a run with usable output can have charged Gateway tokens.
+            if (hasSuccessfulOutput) {
+              window.dispatchEvent(new Event('aiden:balance-refresh'));
+            }
             refreshPlan();
             // Guarantee the finished outputs (with download URLs) render even
             // if the transient status was sparse at the moment we stopped.

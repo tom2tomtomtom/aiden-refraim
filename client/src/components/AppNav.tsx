@@ -30,18 +30,40 @@ export default function AppNav({ appName, tagline, currentApp }: AppNavProps) {
   const [email, setEmail] = useState('')
   const [balance, setBalance] = useState<number | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
+  const balanceRequestRef = useRef(0)
 
   useEffect(() => {
     let cancelled = false
-    fetch(`${GATEWAY}/api/tokens/balance`, { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (cancelled || !d) return
+    async function loadBalance() {
+      const requestId = ++balanceRequestRef.current
+      try {
+        const response = await fetch(`${GATEWAY}/api/tokens/balance`, {
+          credentials: 'include',
+        })
+        const d = response.ok ? await response.json() : null
+        if (cancelled || requestId !== balanceRequestRef.current || !d) return
         if (typeof d.email === 'string') setEmail(d.email)
         if (typeof d.balance === 'number') setBalance(d.balance)
-      })
-      .catch(() => {})
-    return () => { cancelled = true }
+      } catch {
+        // Balance is helpful but non-blocking. Server billing remains authoritative.
+      }
+    }
+    const onRefresh = () => { void loadBalance() }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void loadBalance()
+    }
+
+    void loadBalance()
+    window.addEventListener('aiden:balance-refresh', onRefresh)
+    window.addEventListener('focus', onRefresh)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancelled = true
+      balanceRequestRef.current += 1
+      window.removeEventListener('aiden:balance-refresh', onRefresh)
+      window.removeEventListener('focus', onRefresh)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [])
 
   useEffect(() => {
