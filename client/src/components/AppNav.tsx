@@ -39,6 +39,7 @@ export default function AppNav({ appName, tagline, currentApp }: AppNavProps) {
       try {
         const response = await fetch(`${GATEWAY}/api/tokens/balance`, {
           credentials: 'include',
+          cache: 'no-store',
         })
         const d = response.ok ? await response.json() : null
         if (cancelled || requestId !== balanceRequestRef.current || !d) return

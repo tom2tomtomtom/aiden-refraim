@@ -98,6 +98,31 @@ describe('VideoExporter balance refresh event', () => {
   it('publishes a balance refresh when failed-export compensation restores tokens', async () => {
     const onBalanceRefresh = vi.fn();
     window.addEventListener('aiden:balance-refresh', onBalanceRefresh);
+    mocks.api.getProcessingStatus
+      .mockResolvedValueOnce({ status: 'uploaded', progress: 0, platforms: {} })
+      .mockResolvedValue({
+        status: 'failed',
+        progress: 100,
+        platforms: {},
+        jobId: 'job-1',
+        balanceChanged: true,
+        error: 'This export did not complete. You were not charged. Please retry.',
+      });
+
+    const view = render(<VideoExporter />);
+    fireEvent.click(screen.getByRole('button', { name: /Export 1 Platform/i }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(onBalanceRefresh).toHaveBeenCalledTimes(1);
+    window.removeEventListener('aiden:balance-refresh', onBalanceRefresh);
+    view.unmount();
+  });
+
+  it('publishes a balance refresh when reload recovery performs compensation', async () => {
+    const onBalanceRefresh = vi.fn();
+    window.addEventListener('aiden:balance-refresh', onBalanceRefresh);
     mocks.api.getProcessingStatus.mockResolvedValue({
       status: 'failed',
       progress: 100,
@@ -108,9 +133,8 @@ describe('VideoExporter balance refresh event', () => {
     });
 
     const view = render(<VideoExporter />);
-    fireEvent.click(screen.getByRole('button', { name: /Export 1 Platform/i }));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
+      await Promise.resolve();
     });
 
     expect(onBalanceRefresh).toHaveBeenCalledTimes(1);

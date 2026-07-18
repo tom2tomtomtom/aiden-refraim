@@ -88,6 +88,8 @@ export interface VideoAnalysis {
   };
 }
 
+class ProcessingOwnershipLostError extends Error {}
+
 class BasicVideoProcessor implements VideoProcessor {
   private config: VideoProcessingConfig;
   private analyzer: VideoAnalyzer;
@@ -105,6 +107,7 @@ class BasicVideoProcessor implements VideoProcessor {
     error?: string,
     progress?: number,
     jobId?: string,
+    expectedJobStatuses?: string[],
   ) {
     try {
       const updateData: any = { status, error };
@@ -115,9 +118,21 @@ class BasicVideoProcessor implements VideoProcessor {
       const update = supabase
         .from('processing_jobs')
         .update({ ...updateData, updated_at: new Date().toISOString() });
-      const { error: updateError } = jobId
-        ? await update.eq('id', jobId)
-        : await update.eq('video_id', videoId);
+      let updateError;
+      if (jobId) {
+        let ownedUpdate: any = update.eq('id', jobId);
+        if (expectedJobStatuses?.length) {
+          ownedUpdate = ownedUpdate.in('status', expectedJobStatuses);
+        }
+        const result = await ownedUpdate.select('id').maybeSingle();
+        updateError = result.error;
+        if (!updateError && !result.data) {
+          throw new ProcessingOwnershipLostError('Processing job is no longer active');
+        }
+      } else {
+        const result = await update.eq('video_id', videoId);
+        updateError = result.error;
+      }
 
       if (updateError) {
         console.error('Failed to update processing job status:', updateError);
@@ -138,7 +153,9 @@ class BasicVideoProcessor implements VideoProcessor {
   ): Promise<ProcessingOutcome> {
     const processingStatus = `processing_${context.billingPath}` as Video['status'];
     try {
-      await this.updateVideoStatus(video.id, processingStatus, undefined, 0, context.jobId);
+      await this.updateVideoStatus(
+        video.id, processingStatus, undefined, 0, context.jobId, [processingStatus],
+      );
 
       // Ensure output directories exist. `/tmp/uploads` holds the
       // per-platform rendered mp4s and must be created alongside
@@ -160,7 +177,9 @@ class BasicVideoProcessor implements VideoProcessor {
 
       // Analyze video to detect subjects and important regions
       const analysisResult = await this.analyzer.analyze(sourceUrl);
-      await this.updateVideoStatus(video.id, processingStatus, undefined, 20, context.jobId);
+      await this.updateVideoStatus(
+        video.id, processingStatus, undefined, 20, context.jobId, [processingStatus],
+      );
 
       // Store analysis results
       const { data: ownedVideo, error: updateError } = await supabase
@@ -182,7 +201,9 @@ class BasicVideoProcessor implements VideoProcessor {
 
       if (updateError) throw updateError;
       if (!ownedVideo) throw new Error('Processing run no longer owns this video');
-      await this.updateVideoStatus(video.id, processingStatus, undefined, 30, context.jobId);
+      await this.updateVideoStatus(
+        video.id, processingStatus, undefined, 30, context.jobId, [processingStatus],
+      );
 
       // Process for each platform
       const platformOutputs: Record<string, any> = {};
@@ -220,8 +241,11 @@ class BasicVideoProcessor implements VideoProcessor {
           completedPlatforms++;
           // Update progress (30-90% based on platform completion)
           const progress = 30 + Math.floor((completedPlatforms / platformCount) * 60);
-          await this.updateVideoStatus(video.id, processingStatus, undefined, progress, context.jobId);
+          await this.updateVideoStatus(
+            video.id, processingStatus, undefined, progress, context.jobId, [processingStatus],
+          );
         } catch (error) {
+          if (error instanceof ProcessingOwnershipLostError) throw error;
           // Log the raw error (with ffmpeg stderr) server-side only.
           // Return a generic, stable message + opaque error id to the
           // client so we don't leak container internals / file paths /
@@ -236,12 +260,16 @@ class BasicVideoProcessor implements VideoProcessor {
           completedPlatforms++;
           // Update progress even for failed platforms
           const progress = 30 + Math.floor((completedPlatforms / platformCount) * 60);
-          await this.updateVideoStatus(video.id, processingStatus, undefined, progress, context.jobId);
+          await this.updateVideoStatus(
+            video.id, processingStatus, undefined, progress, context.jobId, [processingStatus],
+          );
         }
       }
 
       // Update progress to 90% before final update
-      await this.updateVideoStatus(video.id, processingStatus, undefined, 90, context.jobId);
+      await this.updateVideoStatus(
+        video.id, processingStatus, undefined, 90, context.jobId, [processingStatus],
+      );
 
       const outcome: ProcessingOutcome = {
         successfulOutputs: Object.values(platformOutputs)
@@ -256,6 +284,9 @@ class BasicVideoProcessor implements VideoProcessor {
       if (context.beforePublish) {
         await context.beforePublish(outcome);
       }
+      const publishingStatus = outcome.successfulOutputs > 0
+        ? `publishing_${context.billingPath}`
+        : `publishing_no_charge_${context.billingPath}`;
 
       // Update video with processed outputs
       const { data: publishedVideo, error: updateError3 } = await supabase
@@ -287,7 +318,9 @@ class BasicVideoProcessor implements VideoProcessor {
       const finalStatus = Object.values(platformOutputs).some(output => output.status === 'error')
         ? 'failed'
         : 'completed';
-      await this.updateVideoStatus(video.id, finalStatus, undefined, 100, context.jobId);
+      await this.updateVideoStatus(
+        video.id, finalStatus, undefined, 100, context.jobId, [publishingStatus],
+      );
       return outcome;
     } catch (error) {
       console.error('Video processing failed:', error);

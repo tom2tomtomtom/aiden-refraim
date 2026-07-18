@@ -142,7 +142,10 @@ export default function VideoExporter() {
       try {
         const status = await api.getProcessingStatus(videoId);
         if (cancelled) return;
-        applyProcessingStatus(status, false);
+        // Initial hydration should not rebroadcast old successful outputs, but
+        // compensation performed by this very status request must refresh the
+        // Gateway balance immediately.
+        applyProcessingStatus(status, Boolean(status.balanceChanged));
         if (status.status.toLowerCase() === 'processing') {
           setIsExporting(true);
           startPolling();

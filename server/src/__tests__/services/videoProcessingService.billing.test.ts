@@ -5,6 +5,7 @@ const mockDbUpdates: Array<{ table: string; data: Record<string, unknown> }> = [
 const mockDbEquals: Array<{ table: string; column: string; value: unknown }> = [];
 const mockDbContains: Array<{ table: string; column: string; value: unknown }> = [];
 const mockOwnershipResults: Array<{ id: string } | null> = [];
+const mockJobOwnershipResults: Array<{ id: string } | null> = [];
 
 jest.mock('../../services/videoAnalysisService', () => ({
   analyzeVideo: (...args: unknown[]) => mockAnalyzeVideo(...args),
@@ -40,15 +41,20 @@ jest.mock('../../config/supabase', () => ({
           mockDbEquals.push({ table, column, value });
           return chain;
         };
+        chain.in = () => chain;
         chain.contains = (column: string, value: unknown) => {
           mockDbContains.push({ table, column, value });
           return chain;
         };
         chain.select = () => chain;
         chain.maybeSingle = () => Promise.resolve({
-          data: mockOwnershipResults.length > 0
-            ? mockOwnershipResults.shift()
-            : { id: 'video-1' },
+          data: table === 'processing_jobs'
+            ? (mockJobOwnershipResults.length > 0
+              ? mockJobOwnershipResults.shift()
+              : { id: 'job-1' })
+            : (mockOwnershipResults.length > 0
+              ? mockOwnershipResults.shift()
+              : { id: 'video-1' }),
           error: null,
         });
         return chain;
@@ -74,6 +80,7 @@ describe('video processing billing publication boundary', () => {
     mockDbEquals.length = 0;
     mockDbContains.length = 0;
     mockOwnershipResults.length = 0;
+    mockJobOwnershipResults.length = 0;
     mockAnalyzeVideo.mockResolvedValue({ metadata: {} });
     mockGetSignedUrl.mockResolvedValue('https://signed.example/video.mp4');
   });
@@ -187,6 +194,27 @@ describe('video processing billing publication boundary', () => {
       beforePublish: async () => {},
     })).rejects.toThrow('no longer owns this video');
 
+    consoleError.mockRestore();
+  });
+
+  it('does not settle when stale recovery takes the job while a render is running', async () => {
+    const settle = jest.fn();
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockProcessVideo.mockResolvedValue('processed/video-1-story.mp4');
+    mockJobOwnershipResults.push(
+      { id: 'job-1' },
+      { id: 'job-1' },
+      { id: 'job-1' },
+      null,
+    );
+
+    await expect(videoProcessor.process(video, ['instagram-story'], {
+      jobId: 'job-1',
+      billingPath: 'gateway_tokens',
+      beforePublish: settle,
+    })).rejects.toThrow(/job is no longer active/i);
+
+    expect(settle).not.toHaveBeenCalled();
     consoleError.mockRestore();
   });
 });

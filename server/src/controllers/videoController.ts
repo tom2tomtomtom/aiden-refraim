@@ -11,7 +11,11 @@ import {
   deductTokens,
   recordCostEvent,
 } from '../lib/gateway-tokens';
-import { getQuotaState, reserveExport } from '../lib/quota';
+import {
+  getQuotaState,
+  recoverPlanQuotaExport,
+  reserveExportForJob,
+} from '../lib/quota';
 import { resolveBillingPath } from '../lib/billing-path';
 
 const VALID_PLATFORMS = [
@@ -47,7 +51,7 @@ function isTimestampStale(
   thresholdMs: number,
 ): boolean {
   const timestamp = Date.parse(updatedAt ?? createdAt ?? '');
-  return Number.isFinite(timestamp) && Date.now() - timestamp >= thresholdMs;
+  return !Number.isFinite(timestamp) || Date.now() - timestamp >= thresholdMs;
 }
 
 function hasSuccessfulOutput(video: { platform_outputs?: unknown } | null): boolean {
@@ -62,7 +66,24 @@ function isTerminalJobStatus(status: unknown): boolean {
     || normalized === 'complete'
     || normalized === 'failed'
     || normalized === 'failed_compensated'
+    || normalized === 'failed_allowance_refunded'
     || normalized === 'error';
+}
+
+function isPlanQuotaRecoveryStatus(status: unknown): boolean {
+  const normalized = String(status ?? '').toLowerCase();
+  return normalized === 'reserving_plan_quota'
+    || normalized === 'processing_plan_quota'
+    || normalized === 'publishing_plan_quota'
+    || normalized === 'publishing_no_charge_plan_quota';
+}
+
+function isLegacyAmbiguousQuotaStatus(status: unknown): boolean {
+  const normalized = String(status ?? '').toLowerCase();
+  return normalized === 'pending'
+    || normalized === 'running'
+    || normalized === 'processing'
+    || normalized === 'publishing_no_charge';
 }
 
 function isStaleNonSettlementJob(job: {
@@ -302,21 +323,18 @@ export const getVideoStatus = async (req: Request, res: Response) => {
       && String(video.status).toLowerCase() === 'processing'
       && isTimestampStale(video.updated_at, video.created_at, MISSING_JOB_CLAIM_STALE_MS)
     ) {
-      const released = await DatabaseService.releaseVideoProcessing(
-        id,
+      const recovery = await recoverPlanQuotaExport(
         user.id,
+        id,
         activeJobId,
-        { status: 'failed', platform_outputs: null } as any,
+        true,
       );
-      if (released) {
-        job = {
-          id: activeJobId,
-          status: 'failed',
-          progress: 100,
-          error: FAILED_EXPORT_MESSAGE,
-        } as any;
-        video.status = 'ERROR';
-        video.platform_outputs = undefined;
+      if (recovery.recovered) {
+        video = await DatabaseService.getVideo(id);
+        job = await DatabaseService.getProcessingJob(activeJobId);
+        if (!video) {
+          return res.status(404).json({ error: 'Video not found' });
+        }
       }
     } else if (job && hasSuccessfulOutput(video) && !isTerminalJobStatus(job.status)) {
       const jobId = job.id;
@@ -329,6 +347,34 @@ export const getVideoStatus = async (req: Request, res: Response) => {
         updated_at: new Date().toISOString(),
       } as any);
       job = { ...job, ...updatedJob, id: jobId };
+    } else if (
+      job
+      && isPlanQuotaRecoveryStatus(job.status)
+      && isTimestampStale(job.updated_at, job.created_at, PROCESSING_JOB_STALE_MS)
+    ) {
+      const jobId = job.id;
+      const recovery = await recoverPlanQuotaExport(user.id, id, jobId, false);
+      if (recovery.recovered) {
+        video = await DatabaseService.getVideo(id);
+        job = await DatabaseService.getProcessingJob(jobId);
+        if (!video) {
+          return res.status(404).json({ error: 'Video not found' });
+        }
+      }
+    } else if (
+      job
+      && isLegacyAmbiguousQuotaStatus(job.status)
+      && isTimestampStale(job.updated_at, job.created_at, PROCESSING_JOB_STALE_MS)
+    ) {
+      const jobId = job.id;
+      const recovery = await recoverPlanQuotaExport(user.id, id, jobId, true);
+      if (recovery.recovered) {
+        video = await DatabaseService.getVideo(id);
+        job = await DatabaseService.getProcessingJob(jobId);
+        if (!video) {
+          return res.status(404).json({ error: 'Video not found' });
+        }
+      }
     } else if (job && isStaleGatewaySettlement(job)) {
       const jobId = job.id;
       const recoveryStatus = `reconciling_gateway_tokens:${randomUUID()}`;
@@ -625,7 +671,9 @@ export const processVideo = async (req: Request, res: Response) => {
       id: requestId,
       video_id: id,
       platforms,
-      status: `processing_${billingPath}`,
+      status: billingPath === 'plan_quota'
+        ? 'reserving_plan_quota'
+        : `processing_${billingPath}`,
       progress: 0,
       error: null,
       user_id: user.id,
@@ -671,26 +719,39 @@ export const processVideo = async (req: Request, res: Response) => {
     };
 
     let reserved = quotaState;
-    try {
-      if (billingPath === 'plan_quota') {
-        const afterReserve = await reserveExport(user.id);
-        if (afterReserve) {
-          reserved = afterReserve;
-        } else {
-          // Lost a race for the last allowance slot; re-resolve with 0 left.
-          billingPath = resolveBillingPath(quotaState.plan, 0, serviceKeyConfigured);
-          if (billingPath !== 'blocked') {
-            const updatedJob = await DatabaseService.updateProcessingJob(requestId, {
+    if (billingPath === 'plan_quota') {
+      // The RPC updates user_billing and this job phase in one transaction.
+      // If its response is lost, leave both durable rows intact so status
+      // recovery can inspect and compensate the committed result safely.
+      const afterReserve = await reserveExportForJob(
+        user.id,
+        requestId,
+        quotaState,
+      );
+      if (afterReserve) {
+        reserved = afterReserve;
+        processingJob = {
+          ...processingJob,
+          status: 'processing_plan_quota',
+        } as any;
+      } else {
+        // Lost a race for the last allowance slot; re-resolve with 0 left.
+        billingPath = resolveBillingPath(quotaState.plan, 0, serviceKeyConfigured);
+        if (billingPath !== 'blocked') {
+          const updatedJob = await DatabaseService.transitionProcessingJob(
+            requestId,
+            ['reserving_plan_quota'],
+            {
               status: `processing_${billingPath}`,
               updated_at: new Date().toISOString(),
-            } as any);
-            processingJob = { ...processingJob, ...updatedJob, id: requestId };
+            } as any,
+          );
+          if (!updatedJob) {
+            throw new Error('Plan reservation is no longer active');
           }
+          processingJob = { ...processingJob, ...updatedJob, id: requestId };
         }
       }
-    } catch (error) {
-      await abandonSetup();
-      throw error;
     }
 
     if (billingPath === 'blocked') {
@@ -785,7 +846,7 @@ export const processVideo = async (req: Request, res: Response) => {
           {
             status: outcome.successfulOutputs > 0
               ? `publishing_${billingPath}`
-              : 'publishing_no_charge',
+              : `publishing_no_charge_${billingPath}`,
             progress: 98,
             updated_at: new Date().toISOString(),
           } as any,
@@ -835,8 +896,9 @@ export const processVideo = async (req: Request, res: Response) => {
             processingJob.id,
           );
           if (!fenced) {
-            // Publication won the video-row race. Do not refund a delivered
-            // output. The next status read will finalize its job state.
+            // Publication may have won the video-row race. Re-read before
+            // deciding: a delivered output must never be refunded, while a
+            // lost/recovered claim with no output must be compensated now.
             const publishedVideo = await DatabaseService.getVideo(id);
             if (hasSuccessfulOutput(publishedVideo)) {
               await DatabaseService.updateProcessingJob(processingJob.id, {
@@ -847,7 +909,30 @@ export const processVideo = async (req: Request, res: Response) => {
                 error: null,
                 updated_at: new Date().toISOString(),
               } as any);
+              return;
             }
+
+            const reconciliation = await reconcileGatewayCharge(
+              user.id,
+              requestId,
+              deductionTransactionId,
+            );
+            if (!reconciliation.success) {
+              console.error('Gateway compensation remains pending:', reconciliation.error);
+              return;
+            }
+            await DatabaseService.releaseVideoProcessing(
+              id,
+              user.id,
+              processingJob.id,
+              { status: 'failed', platform_outputs: null } as any,
+            );
+            await DatabaseService.updateProcessingJob(processingJob.id, {
+              status: 'failed_compensated',
+              progress: 100,
+              error: RETRYABLE_FAILURE_MESSAGE,
+              updated_at: new Date().toISOString(),
+            } as any);
             return;
           }
           await DatabaseService.updateProcessingJob(processingJob.id, {

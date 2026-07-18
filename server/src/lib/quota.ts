@@ -105,6 +105,75 @@ export async function getQuotaState(userId: string): Promise<QuotaState> {
   };
 }
 
+type ReservationRpcResult = {
+  reserved?: boolean;
+  used?: number;
+};
+
+type RecoveryRpcResult = {
+  recovered?: boolean;
+  refunded?: boolean;
+};
+
+function rpcResult<T>(data: T | T[] | null): T | null {
+  return Array.isArray(data) ? (data[0] ?? null) : data;
+}
+
+/**
+ * Atomically reserve one plan slot and advance the durable job from
+ * `reserving_plan_quota` to `processing_plan_quota`. The job id is the
+ * idempotency key, so replaying after a lost response cannot consume twice.
+ */
+export async function reserveExportForJob(
+  userId: string,
+  jobId: string,
+  state: QuotaState,
+): Promise<QuotaState | null> {
+  const { data, error } = await supabase.rpc('reserve_refraim_export', {
+    p_job_id: jobId,
+    p_user_id: userId,
+    p_limit: state.limit,
+  });
+  if (error) throw error;
+
+  const result = rpcResult(data as ReservationRpcResult | ReservationRpcResult[] | null);
+  if (!result?.reserved) return null;
+  const used = Number.isFinite(result.used) ? Number(result.used) : state.used + 1;
+  return {
+    ...state,
+    used,
+    remaining: state.limit === -1
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, state.limit - used),
+  };
+}
+
+/**
+ * Atomically fence publication, refund a reserved allowance at most once,
+ * release the video claim, and finalize the job. Legacy missing-job claims
+ * are materialized under their active job id so retries are also idempotent.
+ */
+export async function recoverPlanQuotaExport(
+  userId: string,
+  videoId: string,
+  jobId: string,
+  legacyMissingJob = false,
+): Promise<{ recovered: boolean; refunded: boolean }> {
+  const { data, error } = await supabase.rpc('recover_refraim_plan_quota_export', {
+    p_user_id: userId,
+    p_video_id: videoId,
+    p_job_id: jobId,
+    p_legacy_missing_job: legacyMissingJob,
+  });
+  if (error) throw error;
+
+  const result = rpcResult(data as RecoveryRpcResult | RecoveryRpcResult[] | null);
+  return {
+    recovered: Boolean(result?.recovered),
+    refunded: Boolean(result?.refunded),
+  };
+}
+
 /**
  * Reserve one export slot atomically if the user has quota. Returns the
  * post-increment state on success, or `null` when the cap is hit.
