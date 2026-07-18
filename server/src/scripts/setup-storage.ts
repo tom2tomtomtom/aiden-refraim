@@ -19,14 +19,14 @@ async function setupStorage() {
     if (!bucketExists) {
       console.log('Creating bucket:', bucketName);
       const { error: createError } = await supabase.storage.createBucket(bucketName, {
-        public: true,
+        public: false,
         fileSizeLimit: 500000000 // 500MB in bytes
       });
       if (createError) throw createError;
     } else {
       console.log('Updating bucket:', bucketName);
       const { error: updateError } = await supabase.storage.updateBucket(bucketName, {
-        public: true,
+        public: false,
         fileSizeLimit: 500000000 // 500MB in bytes
       });
       if (updateError) throw updateError;
@@ -57,11 +57,6 @@ async function setupStorage() {
         TO authenticated 
         USING (bucket_id = 'videos' AND owner = auth.uid());
 
-        -- Allow public access to videos bucket
-        CREATE POLICY IF NOT EXISTS "Public can view videos" 
-        ON storage.objects FOR SELECT 
-        TO public 
-        USING (bucket_id = 'videos');
       `
     });
     if (policyError) throw policyError;

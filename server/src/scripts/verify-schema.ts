@@ -98,13 +98,18 @@ async function verifySchema() {
     if (!videoBucket) {
       console.log('Creating videos bucket...');
       const { error: createError } = await supabase.storage.createBucket('videos', {
-        public: true,
+        public: false,
         fileSizeLimit: 500000000 // 500MB
       });
       if (createError) throw createError;
       console.log('Videos bucket created');
     } else {
-      console.log('Videos bucket exists');
+      const { error: updateError } = await supabase.storage.updateBucket('videos', {
+        public: false,
+        fileSizeLimit: 500000000 // 500MB
+      });
+      if (updateError) throw updateError;
+      console.log('Videos bucket exists and is private');
     }
 
     console.log('Schema verification complete');

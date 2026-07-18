@@ -23,8 +23,4 @@ ON storage.objects FOR DELETE
 TO authenticated 
 USING (bucket_id = 'videos' AND owner = auth.uid());
 
--- Allow public access to videos bucket
-CREATE POLICY "Public can view videos" 
-ON storage.objects FOR SELECT 
-TO public 
-USING (bucket_id = 'videos');
+-- The videos bucket is private. Reads are served through signed URLs.

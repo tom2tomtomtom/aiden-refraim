@@ -23,7 +23,7 @@ serve(async (req) => {
       }
     )
 
-    // Create public bucket if it doesn't exist
+    // Create the private bucket if it doesn't exist
     const { data: buckets, error: listError } = await supabaseClient.storage.listBuckets()
     if (listError) throw listError
 
@@ -32,15 +32,15 @@ serve(async (req) => {
 
     if (!bucketExists) {
       const { error: createError } = await supabaseClient.storage.createBucket(bucketName, {
-        public: true,
+        public: false,
         allowedMimeTypes: ['video/mp4', 'video/quicktime', 'video/x-msvideo'],
         fileSizeLimit: '500MB'
       })
       if (createError) throw createError
     } else {
-      // Update existing bucket to be public
+      // Reassert privacy for existing buckets as well as new ones.
       const { error: updateError } = await supabaseClient.storage.updateBucket(bucketName, {
-        public: true,
+        public: false,
         allowedMimeTypes: ['video/mp4', 'video/quicktime', 'video/x-msvideo'],
         fileSizeLimit: '500MB'
       })
@@ -72,11 +72,6 @@ serve(async (req) => {
         TO authenticated 
         USING (bucket_id = 'videos' AND owner = auth.uid());
 
-        -- Allow public access to videos bucket
-        CREATE POLICY IF NOT EXISTS "Public can view videos" 
-        ON storage.objects FOR SELECT 
-        TO public 
-        USING (bucket_id = 'videos');
       `
     })
     if (policyError) throw policyError
@@ -90,8 +85,9 @@ serve(async (req) => {
     )
   } catch (error) {
     console.error('Error:', error)
+    const message = error instanceof Error ? error.message : String(error)
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: message }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 500,
