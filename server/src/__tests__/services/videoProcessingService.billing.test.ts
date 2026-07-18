@@ -120,7 +120,7 @@ describe('video processing billing publication boundary', () => {
     expect(mockDbContains).toContainEqual({
       table: 'videos',
       column: 'processing_metadata',
-      value: { active_job_id: 'job-1' },
+      value: { active_job_id: 'job-1', publication_state: 'active' },
     });
   });
 

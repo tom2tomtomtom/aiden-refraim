@@ -40,7 +40,10 @@ describe('DatabaseService processing claim', () => {
     expect(chain.update).toHaveBeenCalledWith(expect.objectContaining({
       status: 'processing',
       platform_outputs: null,
-      processing_metadata: { active_job_id: 'job-1' },
+      processing_metadata: {
+        active_job_id: 'job-1',
+        publication_state: 'active',
+      },
       updated_at: expect.any(String),
     }));
     expect(chain.eq).toHaveBeenCalledWith('id', 'video-1');
@@ -97,6 +100,39 @@ describe('DatabaseService processing claim', () => {
     )).resolves.toEqual(job);
 
     expect(chain.in).toHaveBeenCalledWith('status', ['publishing_gateway_tokens']);
+  });
+
+  it('atomically fences publication before reconciliation can compensate', async () => {
+    chain.maybeSingle.mockResolvedValue({ data: { id: 'video-1' }, error: null });
+
+    await expect(DatabaseService.fenceVideoPublication('video-1', 'user-1', 'job-1'))
+      .resolves.toBe(true);
+
+    expect(chain.update).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'processing',
+      processing_metadata: {
+        active_job_id: 'job-1',
+        publication_state: 'reconciling',
+      },
+    }));
+    expect(chain.contains).toHaveBeenCalledWith('processing_metadata', {
+      active_job_id: 'job-1',
+      publication_state: 'active',
+    });
+  });
+
+  it('treats an already-owned reconciliation fence as durable after a crash', async () => {
+    chain.maybeSingle
+      .mockResolvedValueOnce({ data: null, error: null })
+      .mockResolvedValueOnce({ data: { id: 'video-1' }, error: null });
+
+    await expect(DatabaseService.fenceVideoPublication('video-1', 'user-1', 'job-1'))
+      .resolves.toBe(true);
+
+    expect(chain.contains).toHaveBeenCalledWith('processing_metadata', {
+      active_job_id: 'job-1',
+      publication_state: 'reconciling',
+    });
   });
 
   it('deletes a video only when its row is still idle at the final write', async () => {

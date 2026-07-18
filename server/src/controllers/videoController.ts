@@ -27,9 +27,28 @@ const VALID_PLATFORMS = [
 
 const RETRYABLE_FAILURE_MESSAGE =
   'This export did not complete. You were not charged. Please retry.';
+const FAILED_EXPORT_MESSAGE =
+  'This export did not complete. Please retry.';
 const RECONCILING_MESSAGE =
   'We are restoring your token balance. Please wait before retrying.';
 const GATEWAY_SETTLEMENT_STALE_MS = 60_000;
+const PROCESSING_JOB_STALE_MS = 30 * 60_000;
+const MISSING_JOB_CLAIM_STALE_MS = 5 * 60_000;
+
+function getActiveJobId(video: { processing_metadata?: unknown } | null): string | null {
+  if (!video?.processing_metadata || typeof video.processing_metadata !== 'object') return null;
+  const value = (video.processing_metadata as { active_job_id?: unknown }).active_job_id;
+  return typeof value === 'string' ? value : null;
+}
+
+function isTimestampStale(
+  updatedAt: string | undefined,
+  createdAt: string | undefined,
+  thresholdMs: number,
+): boolean {
+  const timestamp = Date.parse(updatedAt ?? createdAt ?? '');
+  return Number.isFinite(timestamp) && Date.now() - timestamp >= thresholdMs;
+}
 
 function hasSuccessfulOutput(video: { platform_outputs?: unknown } | null): boolean {
   if (!video?.platform_outputs || typeof video.platform_outputs !== 'object') return false;
@@ -42,7 +61,17 @@ function isTerminalJobStatus(status: unknown): boolean {
   return normalized === 'completed'
     || normalized === 'complete'
     || normalized === 'failed'
+    || normalized === 'failed_compensated'
     || normalized === 'error';
+}
+
+function isStaleNonSettlementJob(job: {
+  status?: unknown;
+  updated_at?: string;
+  created_at?: string;
+}): boolean {
+  if (isTerminalJobStatus(job.status) || isStaleGatewaySettlement(job)) return false;
+  return isTimestampStale(job.updated_at, job.created_at, PROCESSING_JOB_STALE_MS);
 }
 
 function isStaleGatewaySettlement(job: {
@@ -259,12 +288,37 @@ export const getVideoStatus = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    // The job id is also the Gateway request id. Keeping that correlation
-    // durable lets a later poll safely compensate a charge after a process
-    // crash between token settlement and output publication.
-    let job = await DatabaseService.getLatestProcessingJob(id, user.id);
+    // The active job id lives on the video claim. Prefer it over "latest" so
+    // an orphan job created before a lost claim cannot impersonate the worker
+    // that actually owns this video.
+    const activeJobId = getActiveJobId(video);
+    let job = activeJobId
+      ? await DatabaseService.getProcessingJob(activeJobId)
+      : await DatabaseService.getLatestProcessingJob(id, user.id);
 
-    if (job && hasSuccessfulOutput(video) && !isTerminalJobStatus(job.status)) {
+    if (
+      activeJobId
+      && !job
+      && String(video.status).toLowerCase() === 'processing'
+      && isTimestampStale(video.updated_at, video.created_at, MISSING_JOB_CLAIM_STALE_MS)
+    ) {
+      const released = await DatabaseService.releaseVideoProcessing(
+        id,
+        user.id,
+        activeJobId,
+        { status: 'failed', platform_outputs: null } as any,
+      );
+      if (released) {
+        job = {
+          id: activeJobId,
+          status: 'failed',
+          progress: 100,
+          error: FAILED_EXPORT_MESSAGE,
+        } as any;
+        video.status = 'ERROR';
+        video.platform_outputs = undefined;
+      }
+    } else if (job && hasSuccessfulOutput(video) && !isTerminalJobStatus(job.status)) {
       const jobId = job.id;
       const recoveredStatus = String(video.status).toLowerCase() === 'failed'
         ? 'failed'
@@ -294,47 +348,158 @@ export const getVideoStatus = async (req: Request, res: Response) => {
         job = await DatabaseService.getLatestProcessingJob(id, user.id);
       } else {
         job = { ...job, ...recoveryJob, id: jobId };
-        const reconciliation = await reconcileGatewayCharge(user.id, jobId);
-        if (!reconciliation.success) {
-          return res.json({
-            status: 'processing',
-            progress: 99,
-            platforms: {},
-            platformOutputs: {},
-            jobId,
-            reconciling: true,
-            error: RECONCILING_MESSAGE,
-          });
-        }
+        const videoStatus = String(video.status).toLowerCase();
+        const videoAlreadyReleased = !activeJobId
+          && (videoStatus === 'failed' || videoStatus === 'error')
+          && !hasSuccessfulOutput(video);
 
-        const released = await DatabaseService.releaseVideoProcessing(
-          id,
-          user.id,
-          jobId,
-          {
-            status: 'failed',
-            platform_outputs: null,
-          } as any,
-        );
-        if (released) {
+        if (videoAlreadyReleased) {
+          // Compensation and release may have committed just before the
+          // process died. Gateway reconciliation is idempotent, so finish the
+          // durable job marker without trying to reacquire a cleared fence.
+          const reconciliation = await reconcileGatewayCharge(user.id, jobId);
+          if (!reconciliation.success) {
+            return res.json({
+              status: 'processing',
+              progress: 99,
+              platforms: {},
+              platformOutputs: {},
+              jobId,
+              reconciling: true,
+              error: RECONCILING_MESSAGE,
+            });
+          }
           const updatedJob = await DatabaseService.updateProcessingJob(jobId, {
-            status: 'failed',
+            status: 'failed_compensated',
             progress: 100,
             error: RETRYABLE_FAILURE_MESSAGE,
             updated_at: new Date().toISOString(),
           } as any);
           job = { ...job, ...updatedJob, id: jobId };
-          video.status = 'ERROR';
-          video.platform_outputs = undefined;
         } else {
-          // A live worker crossed the publication boundary before recovery won
-          // the ownership predicate. Re-read rather than overwriting its result.
-          video = await DatabaseService.getVideo(id);
-          job = await DatabaseService.getLatestProcessingJob(id, user.id);
-          if (!video) {
-            return res.status(404).json({ error: 'Video not found' });
+          const fenced = await DatabaseService.fenceVideoPublication(id, user.id, jobId);
+          if (!fenced) {
+            // Publication won the row race. Never compensate a run whose output
+            // may already be visible; re-read its durable result instead.
+            video = await DatabaseService.getVideo(id);
+            job = activeJobId
+              ? await DatabaseService.getProcessingJob(jobId)
+              : await DatabaseService.getLatestProcessingJob(id, user.id);
+            if (!video) {
+              return res.status(404).json({ error: 'Video not found' });
+            }
+            if (hasSuccessfulOutput(video) && job && !isTerminalJobStatus(job.status)) {
+              const recoveredStatus = String(video.status).toLowerCase() === 'failed'
+                ? 'failed'
+                : 'completed';
+              const updatedJob = await DatabaseService.updateProcessingJob(jobId, {
+                status: recoveredStatus,
+                progress: 100,
+                error: null,
+                updated_at: new Date().toISOString(),
+              } as any);
+              job = { ...job, ...updatedJob, id: jobId };
+            }
+          } else {
+            const reconciliation = await reconcileGatewayCharge(user.id, jobId);
+            if (!reconciliation.success) {
+              return res.json({
+                status: 'processing',
+                progress: 99,
+                platforms: {},
+                platformOutputs: {},
+                jobId,
+                reconciling: true,
+                error: RECONCILING_MESSAGE,
+              });
+            }
+
+            const released = await DatabaseService.releaseVideoProcessing(
+              id,
+              user.id,
+              jobId,
+              {
+                status: 'failed',
+                platform_outputs: null,
+              } as any,
+            );
+            if (released) {
+              const updatedJob = await DatabaseService.updateProcessingJob(jobId, {
+                status: 'failed_compensated',
+                progress: 100,
+                error: RETRYABLE_FAILURE_MESSAGE,
+                updated_at: new Date().toISOString(),
+              } as any);
+              job = { ...job, ...updatedJob, id: jobId };
+              video.status = 'ERROR';
+              video.platform_outputs = undefined;
+            } else {
+              // A live worker crossed the publication boundary before recovery
+              // won the ownership predicate. Re-read its result.
+              video = await DatabaseService.getVideo(id);
+              job = await DatabaseService.getLatestProcessingJob(id, user.id);
+              if (!video) {
+                return res.status(404).json({ error: 'Video not found' });
+              }
+            }
           }
         }
+      }
+    } else if (job && isStaleNonSettlementJob(job)) {
+      const jobId = job.id;
+      const recoveryStatus = `recovering_no_charge:${randomUUID()}`;
+      const recoveryJob = await DatabaseService.transitionProcessingJob(
+        jobId,
+        [String(job.status)],
+        {
+          status: recoveryStatus,
+          progress: 99,
+          error: FAILED_EXPORT_MESSAGE,
+          updated_at: new Date().toISOString(),
+        } as any,
+      );
+      if (recoveryJob) {
+        const videoStatus = String(video.status).toLowerCase();
+        const orphanedBeforeClaim = !activeJobId && videoStatus !== 'processing';
+        if (orphanedBeforeClaim) {
+          const updatedJob = await DatabaseService.updateProcessingJob(jobId, {
+            status: 'failed',
+            progress: 100,
+            error: FAILED_EXPORT_MESSAGE,
+            updated_at: new Date().toISOString(),
+          } as any);
+          job = { ...job, ...updatedJob, id: jobId };
+        } else {
+          const released = await DatabaseService.releaseVideoProcessing(
+            id,
+            user.id,
+            jobId,
+            { status: 'failed', platform_outputs: null } as any,
+          );
+          if (released) {
+            const updatedJob = await DatabaseService.updateProcessingJob(jobId, {
+              status: 'failed',
+              progress: 100,
+              error: FAILED_EXPORT_MESSAGE,
+              updated_at: new Date().toISOString(),
+            } as any);
+            job = { ...job, ...updatedJob, id: jobId };
+            video.status = 'ERROR';
+            video.platform_outputs = undefined;
+          } else {
+            video = await DatabaseService.getVideo(id);
+            job = activeJobId
+              ? await DatabaseService.getProcessingJob(jobId)
+              : await DatabaseService.getLatestProcessingJob(id, user.id);
+            if (!video) {
+              return res.status(404).json({ error: 'Video not found' });
+            }
+          }
+        }
+      } else {
+        job = activeJobId
+          ? await DatabaseService.getProcessingJob(jobId)
+          : await DatabaseService.getLatestProcessingJob(id, user.id);
       }
     }
 
@@ -343,7 +508,7 @@ export const getVideoStatus = async (req: Request, res: Response) => {
     const videoStatus = String(video.status).toLowerCase();
     const normalizedStatus = job && !isTerminalJobStatus(jobStatus)
       ? 'processing'
-      : jobStatus === 'failed' || jobStatus === 'error'
+      : jobStatus.startsWith('failed') || jobStatus === 'error'
         ? 'failed'
         : videoStatus === 'error'
           ? 'failed'
@@ -387,8 +552,9 @@ export const getVideoStatus = async (req: Request, res: Response) => {
       progress: aggregateProgress,
       platforms,
       platformOutputs: signedRecord.platform_outputs, // kept for any external callers on the old shape
-      jobId: job?.id,
+      jobId: job?.id ?? activeJobId ?? undefined,
       error: job?.error ?? undefined,
+      balanceChanged: jobStatus === 'failed_compensated',
     });
   } catch (error) {
     console.error('Error in getVideoStatus:', error);
@@ -451,13 +617,34 @@ export const processVideo = async (req: Request, res: Response) => {
       });
     }
 
-    // The video row is the cross-instance lease. Its conditional update is
-    // atomic in Postgres, so reloads and double-clicks can recover the active
-    // job but cannot reserve or start a second paid run for the same video.
+    // Persist the request id before taking the video lease or reserving plan
+    // allowance. A crash can leave an orphan job, but never an untraceable
+    // active claim or a consumed allowance with no durable job identity.
     const requestId = randomUUID();
-    const claimed = await DatabaseService.claimVideoForProcessing(id, user.id, requestId);
+    let processingJob = await DatabaseService.createProcessingJob({
+      id: requestId,
+      video_id: id,
+      platforms,
+      status: `processing_${billingPath}`,
+      progress: 0,
+      error: null,
+      user_id: user.id,
+    } as any);
+
+    let claimed: boolean;
+    try {
+      claimed = await DatabaseService.claimVideoForProcessing(id, user.id, requestId);
+    } catch (error) {
+      await DatabaseService.deleteProcessingJob(requestId, user.id);
+      throw error;
+    }
     if (!claimed) {
-      const activeJob = await DatabaseService.getLatestProcessingJob(id, user.id);
+      await DatabaseService.deleteProcessingJob(requestId, user.id);
+      const currentVideo = await DatabaseService.getVideo(id);
+      const currentActiveJobId = getActiveJobId(currentVideo);
+      const activeJob = currentActiveJobId
+        ? await DatabaseService.getProcessingJob(currentActiveJobId)
+        : await DatabaseService.getLatestProcessingJob(id, user.id);
       if (activeJob && !isTerminalJobStatus(activeJob.status)) {
         return res.status(202).json({ ...activeJob, active: true });
       }
@@ -478,19 +665,36 @@ export const processVideo = async (req: Request, res: Response) => {
       } as any,
     );
 
+    const abandonSetup = async () => {
+      await restoreClaim();
+      await DatabaseService.deleteProcessingJob(requestId, user.id);
+    };
+
     let reserved = quotaState;
-    if (billingPath === 'plan_quota') {
-      const afterReserve = await reserveExport(user.id);
-      if (afterReserve) {
-        reserved = afterReserve;
-      } else {
-        // Lost a race for the last allowance slot; re-resolve with 0 left.
-        billingPath = resolveBillingPath(quotaState.plan, 0, serviceKeyConfigured);
+    try {
+      if (billingPath === 'plan_quota') {
+        const afterReserve = await reserveExport(user.id);
+        if (afterReserve) {
+          reserved = afterReserve;
+        } else {
+          // Lost a race for the last allowance slot; re-resolve with 0 left.
+          billingPath = resolveBillingPath(quotaState.plan, 0, serviceKeyConfigured);
+          if (billingPath !== 'blocked') {
+            const updatedJob = await DatabaseService.updateProcessingJob(requestId, {
+              status: `processing_${billingPath}`,
+              updated_at: new Date().toISOString(),
+            } as any);
+            processingJob = { ...processingJob, ...updatedJob, id: requestId };
+          }
+        }
       }
+    } catch (error) {
+      await abandonSetup();
+      throw error;
     }
 
     if (billingPath === 'blocked') {
-      await restoreClaim();
+      await abandonSetup();
       return res.status(402).json({
         error: 'Monthly export limit reached',
         message: 'You have used your export allowance for this month. Upgrade your plan to keep exporting.',
@@ -502,7 +706,7 @@ export const processVideo = async (req: Request, res: Response) => {
     if (chargeGatewayTokens) {
       const tokenCheck = await checkTokens(user.id, 'refraim', 'video_export');
       if (!tokenCheck.allowed) {
-        await restoreClaim();
+        await abandonSetup();
         return res.status(402).json({
           error: 'Insufficient tokens',
           message: 'Your free export allowance is used and your token balance is too low for this export.',
@@ -511,22 +715,6 @@ export const processVideo = async (req: Request, res: Response) => {
           upgradeUrl: '/#/billing',
         });
       }
-    }
-
-    let processingJob;
-    try {
-      processingJob = await DatabaseService.createProcessingJob({
-        id: requestId,
-        video_id: id,
-        platforms,
-        status: `processing_${billingPath}`,
-        progress: 0,
-        error: null,
-        user_id: user.id,
-      } as any);
-    } catch (error) {
-      await restoreClaim();
-      throw error;
     }
 
     const processingStartedAt = Date.now();
@@ -620,14 +808,14 @@ export const processVideo = async (req: Request, res: Response) => {
         }
 
         if (hasSuccessfulOutput(currentVideo)) {
-          let latestJob;
+          let currentJob;
           try {
-            latestJob = await DatabaseService.getLatestProcessingJob(id, user.id);
+            currentJob = await DatabaseService.getProcessingJob(processingJob.id);
           } catch (jobReadError) {
             console.error('Could not verify failed publication ownership:', jobReadError);
             return;
           }
-          if (latestJob?.id === processingJob.id) {
+          if (currentJob?.id === processingJob.id) {
             await DatabaseService.updateProcessingJob(processingJob.id, {
               status: String(currentVideo?.status).toLowerCase() === 'failed'
                 ? 'failed'
@@ -639,7 +827,29 @@ export const processVideo = async (req: Request, res: Response) => {
           }
         }
 
+        let compensated = false;
         if (chargeGatewayTokens && gatewaySettlementStarted) {
+          const fenced = await DatabaseService.fenceVideoPublication(
+            id,
+            user.id,
+            processingJob.id,
+          );
+          if (!fenced) {
+            // Publication won the video-row race. Do not refund a delivered
+            // output. The next status read will finalize its job state.
+            const publishedVideo = await DatabaseService.getVideo(id);
+            if (hasSuccessfulOutput(publishedVideo)) {
+              await DatabaseService.updateProcessingJob(processingJob.id, {
+                status: String(publishedVideo?.status).toLowerCase() === 'failed'
+                  ? 'failed'
+                  : 'completed',
+                progress: 100,
+                error: null,
+                updated_at: new Date().toISOString(),
+              } as any);
+            }
+            return;
+          }
           await DatabaseService.updateProcessingJob(processingJob.id, {
             status: 'compensation_pending_gateway_tokens',
             progress: 99,
@@ -655,9 +865,10 @@ export const processVideo = async (req: Request, res: Response) => {
             console.error('Gateway compensation remains pending:', reconciliation.error);
             return;
           }
+          compensated = true;
         }
 
-        await DatabaseService.releaseVideoProcessing(
+        const released = await DatabaseService.releaseVideoProcessing(
           id,
           user.id,
           processingJob.id,
@@ -666,10 +877,17 @@ export const processVideo = async (req: Request, res: Response) => {
             platform_outputs: null,
           } as any,
         );
+        if (!released) {
+          // Keep the durable job nonterminal. A later status request can
+          // inspect whether publication or another recovery owner won.
+          return;
+        }
         await DatabaseService.updateProcessingJob(processingJob.id, {
-          status: 'failed',
+          status: compensated ? 'failed_compensated' : 'failed',
           progress: 100,
-          error: RETRYABLE_FAILURE_MESSAGE,
+          error: chargeGatewayTokens
+            ? RETRYABLE_FAILURE_MESSAGE
+            : FAILED_EXPORT_MESSAGE,
           updated_at: new Date().toISOString(),
         } as any);
         if (process.env.AIDEN_SERVICE_KEY) {

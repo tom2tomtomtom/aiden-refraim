@@ -110,10 +110,19 @@ export class DatabaseService {
       .from('processing_jobs')
       .select('*')
       .eq('id', id)
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
-    return job;
+    return (job as ProcessingJob | null) ?? null;
+  }
+
+  static async deleteProcessingJob(id: string, userId: string): Promise<void> {
+    const { error } = await supabase
+      .from('processing_jobs')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId);
+    if (error) throw error;
   }
 
   /**
@@ -131,7 +140,10 @@ export class DatabaseService {
       .update({
         status: 'processing',
         platform_outputs: null,
-        processing_metadata: { active_job_id: jobId },
+        processing_metadata: {
+          active_job_id: jobId,
+          publication_state: 'active',
+        },
         updated_at: new Date().toISOString(),
       })
       .eq('id', videoId)
@@ -143,6 +155,56 @@ export class DatabaseService {
 
     if (error) throw error;
     return Boolean(data);
+  }
+
+  /**
+   * Revoke a worker's right to publish before any ambiguous Gateway charge is
+   * compensated. This conditional update races atomically with publication:
+   * exactly one can replace the active publication state.
+   */
+  static async fenceVideoPublication(
+    videoId: string,
+    userId: string,
+    jobId: string,
+  ): Promise<boolean> {
+    const { data: fenced, error } = await supabase
+      .from('videos')
+      .update({
+        status: 'processing',
+        platform_outputs: null,
+        processing_metadata: {
+          active_job_id: jobId,
+          publication_state: 'reconciling',
+        },
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', videoId)
+      .eq('user_id', userId)
+      .contains('processing_metadata', {
+        active_job_id: jobId,
+        publication_state: 'active',
+      })
+      .select('id')
+      .maybeSingle();
+    if (error) throw error;
+    if (fenced) return true;
+
+    // A process can die after writing the fence but before recording the next
+    // job phase. Recovery must be able to resume compensation from that exact
+    // same ownership state without reopening publication.
+    const { data: existingFence, error: existingFenceError } = await supabase
+      .from('videos')
+      .select('id')
+      .eq('id', videoId)
+      .eq('user_id', userId)
+      .eq('status', 'processing')
+      .contains('processing_metadata', {
+        active_job_id: jobId,
+        publication_state: 'reconciling',
+      })
+      .maybeSingle();
+    if (existingFenceError) throw existingFenceError;
+    return Boolean(existingFence);
   }
 
   /**

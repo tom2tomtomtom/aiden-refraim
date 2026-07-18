@@ -169,10 +169,14 @@ class BasicVideoProcessor implements VideoProcessor {
           processing_metadata: {
             ...analysisResult,
             active_job_id: context.jobId,
+            publication_state: 'active',
           },
         })
         .eq('id', video.id)
-        .contains('processing_metadata', { active_job_id: context.jobId })
+        .contains('processing_metadata', {
+          active_job_id: context.jobId,
+          publication_state: 'active',
+        })
         .select('id')
         .maybeSingle();
 
@@ -266,7 +270,10 @@ class BasicVideoProcessor implements VideoProcessor {
           processing_metadata: analysisResult,
         })
         .eq('id', video.id)
-        .contains('processing_metadata', { active_job_id: context.jobId })
+        .contains('processing_metadata', {
+          active_job_id: context.jobId,
+          publication_state: 'active',
+        })
         .select('id')
         .maybeSingle();
 
