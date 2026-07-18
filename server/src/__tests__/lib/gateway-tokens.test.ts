@@ -57,4 +57,46 @@ describe('Gateway cost linkage', () => {
     });
     expect(JSON.parse(options.body).measuredCostUsd).toBeUndefined();
   });
+
+  it('atomically compensates an async job deduction using its durable request id', async () => {
+    const { compensateTokens } = await import('../../lib/gateway-tokens');
+    await compensateTokens(
+      'user-1',
+      'refraim',
+      'video_export',
+      '33333333-3333-4333-8333-333333333333',
+      '44444444-4444-4444-8444-444444444444',
+    );
+
+    const [url, options] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(url).toBe('https://test.aiden.services/api/tokens/compensate');
+    expect(JSON.parse(options.body)).toEqual({
+      userId: 'user-1',
+      product: 'refraim',
+      operation: 'video_export',
+      requestId: '33333333-3333-4333-8333-333333333333',
+      transactionId: '44444444-4444-4444-8444-444444444444',
+      reason: 'async_job_failed',
+    });
+  });
+
+  it('keeps a missing deduction unresolved until the idempotent deduction is replayed', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: 'compensable_deduction_not_found' }),
+    }) as jest.Mock;
+    const { compensateTokens } = await import('../../lib/gateway-tokens');
+
+    await expect(compensateTokens(
+      'user-1',
+      'refraim',
+      'video_export',
+      '55555555-5555-4555-8555-555555555555',
+    )).resolves.toMatchObject({
+      success: false,
+      noDeduction: true,
+      error: 'deduction_not_found',
+    });
+  });
 });

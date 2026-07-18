@@ -38,7 +38,7 @@ export interface VideoProcessor {
   process(
     video: Video,
     platforms: string[],
-    beforePublish?: BeforePublish,
+    context: ProcessingRunContext,
   ): Promise<ProcessingOutcome>;
   processWithFocusPoints(
     video: Video,
@@ -53,6 +53,12 @@ export interface ProcessingOutcome {
 }
 
 export type BeforePublish = (outcome: ProcessingOutcome) => Promise<void>;
+
+export interface ProcessingRunContext {
+  jobId: string;
+  billingPath: 'plan_quota' | 'gateway_tokens';
+  beforePublish?: BeforePublish;
+}
 
 export interface VideoAnalyzer {
   analyze(videoUrl: string): Promise<VideoAnalysis>;
@@ -93,17 +99,25 @@ class BasicVideoProcessor implements VideoProcessor {
     };
   }
 
-  private async updateVideoStatus(videoId: string, status: Video['status'], error?: string, progress?: number) {
+  private async updateVideoStatus(
+    videoId: string,
+    status: Video['status'],
+    error?: string,
+    progress?: number,
+    jobId?: string,
+  ) {
     try {
       const updateData: any = { status, error };
       if (progress !== undefined) {
         updateData.progress = progress;
       }
 
-      const { error: updateError } = await supabase
+      const update = supabase
         .from('processing_jobs')
-        .update(updateData)
-        .eq('video_id', videoId);
+        .update({ ...updateData, updated_at: new Date().toISOString() });
+      const { error: updateError } = jobId
+        ? await update.eq('id', jobId)
+        : await update.eq('video_id', videoId);
 
       if (updateError) {
         console.error('Failed to update processing job status:', updateError);
@@ -120,10 +134,11 @@ class BasicVideoProcessor implements VideoProcessor {
   async process(
     video: Video,
     platforms: string[],
-    beforePublish?: BeforePublish,
+    context: ProcessingRunContext,
   ): Promise<ProcessingOutcome> {
+    const processingStatus = `processing_${context.billingPath}` as Video['status'];
     try {
-      await this.updateVideoStatus(video.id, 'processing', undefined, 0);
+      await this.updateVideoStatus(video.id, processingStatus, undefined, 0, context.jobId);
 
       // Ensure output directories exist. `/tmp/uploads` holds the
       // per-platform rendered mp4s and must be created alongside
@@ -145,16 +160,25 @@ class BasicVideoProcessor implements VideoProcessor {
 
       // Analyze video to detect subjects and important regions
       const analysisResult = await this.analyzer.analyze(sourceUrl);
-      await this.updateVideoStatus(video.id, 'processing', undefined, 20);
+      await this.updateVideoStatus(video.id, processingStatus, undefined, 20, context.jobId);
 
       // Store analysis results
-      const { error: updateError } = await supabase
+      const { data: ownedVideo, error: updateError } = await supabase
         .from('videos')
-        .update({ processing_metadata: analysisResult })
-        .eq('id', video.id);
+        .update({
+          processing_metadata: {
+            ...analysisResult,
+            active_job_id: context.jobId,
+          },
+        })
+        .eq('id', video.id)
+        .contains('processing_metadata', { active_job_id: context.jobId })
+        .select('id')
+        .maybeSingle();
 
       if (updateError) throw updateError;
-      await this.updateVideoStatus(video.id, 'processing', undefined, 30);
+      if (!ownedVideo) throw new Error('Processing run no longer owns this video');
+      await this.updateVideoStatus(video.id, processingStatus, undefined, 30, context.jobId);
 
       // Process for each platform
       const platformOutputs: Record<string, any> = {};
@@ -192,7 +216,7 @@ class BasicVideoProcessor implements VideoProcessor {
           completedPlatforms++;
           // Update progress (30-90% based on platform completion)
           const progress = 30 + Math.floor((completedPlatforms / platformCount) * 60);
-          await this.updateVideoStatus(video.id, 'processing', undefined, progress);
+          await this.updateVideoStatus(video.id, processingStatus, undefined, progress, context.jobId);
         } catch (error) {
           // Log the raw error (with ffmpeg stderr) server-side only.
           // Return a generic, stable message + opaque error id to the
@@ -208,12 +232,12 @@ class BasicVideoProcessor implements VideoProcessor {
           completedPlatforms++;
           // Update progress even for failed platforms
           const progress = 30 + Math.floor((completedPlatforms / platformCount) * 60);
-          await this.updateVideoStatus(video.id, 'processing', undefined, progress);
+          await this.updateVideoStatus(video.id, processingStatus, undefined, progress, context.jobId);
         }
       }
 
       // Update progress to 90% before final update
-      await this.updateVideoStatus(video.id, 'processing', undefined, 90);
+      await this.updateVideoStatus(video.id, processingStatus, undefined, 90, context.jobId);
 
       const outcome: ProcessingOutcome = {
         successfulOutputs: Object.values(platformOutputs)
@@ -225,22 +249,29 @@ class BasicVideoProcessor implements VideoProcessor {
       // A Gateway-token export is settled here, before completed output or a
       // terminal state becomes visible to the polling client. All-failed
       // runs skip settlement, so work that produced nothing is never charged.
-      if (outcome.successfulOutputs > 0 && beforePublish) {
-        await beforePublish(outcome);
+      if (context.beforePublish) {
+        await context.beforePublish(outcome);
       }
 
       // Update video with processed outputs
-      const { error: updateError3 } = await supabase
+      const { data: publishedVideo, error: updateError3 } = await supabase
         .from('videos')
         .update({
           status: Object.values(platformOutputs).some(output => output.status === 'error')
             ? 'failed'
             : 'completed',
-          platform_outputs: platformOutputs
+          platform_outputs: platformOutputs,
+          // Successful publication releases the ownership fence while
+          // retaining the analysis payload used by the editor.
+          processing_metadata: analysisResult,
         })
-        .eq('id', video.id);
+        .eq('id', video.id)
+        .contains('processing_metadata', { active_job_id: context.jobId })
+        .select('id')
+        .maybeSingle();
 
       if (updateError3) throw updateError3;
+      if (!publishedVideo) throw new Error('Processing run no longer owns this video');
 
       // Always jump to 100% at the end. 'failed' is a terminal state
       // too and the client uses progress=100 + status to unblock its
@@ -249,23 +280,13 @@ class BasicVideoProcessor implements VideoProcessor {
       const finalStatus = Object.values(platformOutputs).some(output => output.status === 'error')
         ? 'failed'
         : 'completed';
-      await this.updateVideoStatus(video.id, finalStatus, undefined, 100);
+      await this.updateVideoStatus(video.id, finalStatus, undefined, 100, context.jobId);
       return outcome;
     } catch (error) {
       console.error('Video processing failed:', error);
-      const { error: videoUpdateError } = await supabase
-        .from('videos')
-        .update({ status: 'failed' })
-        .eq('id', video.id);
-      if (videoUpdateError) {
-        console.error('Failed to publish terminal video status:', videoUpdateError);
-      }
-      await this.updateVideoStatus(
-        video.id,
-        'failed',
-        error instanceof Error ? error.message : 'Unknown error',
-        100
-      );
+      // The controller owns terminal failure and compensation. Keeping the
+      // last durable job state here lets a later status request distinguish
+      // pre-charge processing from ambiguous settlement/publication failure.
       throw error;
     }
   }
@@ -474,7 +495,7 @@ export const videoProcessor = new BasicVideoProcessor();
 export const processVideoForPlatforms = (
   video: Video,
   platforms: string[],
-  beforePublish?: BeforePublish,
+  context: ProcessingRunContext,
 ) => {
-  return videoProcessor.process(video, platforms, beforePublish);
+  return videoProcessor.process(video, platforms, context);
 };

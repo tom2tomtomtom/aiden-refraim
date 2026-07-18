@@ -31,6 +31,16 @@ interface DeductResult {
   idempotent?: boolean
 }
 
+export interface CompensationResult {
+  success: boolean
+  noDeduction?: boolean
+  newBalance?: number
+  compensatedTokens?: number
+  transactionId?: string
+  idempotent?: boolean
+  error?: string
+}
+
 function getHeaders(userId: string): Record<string, string> {
   if (!SERVICE_KEY) {
     throw new Error('AIDEN_SERVICE_KEY is not configured')
@@ -95,6 +105,48 @@ export async function deductTokens(
   } catch (err) {
     console.error('[gateway-tokens] Deduct threw:', err)
     // Fail closed: don't silently succeed on network failure.
+    return { success: false, error: 'gateway_unreachable' }
+  }
+}
+
+export async function compensateTokens(
+  userId: string,
+  product: string,
+  operation: string,
+  requestId: string,
+  transactionId?: string,
+): Promise<CompensationResult> {
+  try {
+    const res = await fetch(`${GATEWAY_URL}/api/tokens/compensate`, {
+      method: 'POST',
+      headers: getHeaders(userId),
+      body: JSON.stringify({
+        userId,
+        product,
+        operation,
+        requestId,
+        transactionId,
+        reason: 'async_job_failed',
+      }),
+    })
+
+    // A 404 is not a durable promise that an ambiguous in-flight deduction
+    // cannot commit later. The caller must first replay the idempotent
+    // deduction request, then retry compensation against the converged row.
+    if (res.status === 404) {
+      return {
+        success: false,
+        noDeduction: true,
+        error: 'deduction_not_found',
+      }
+    }
+    if (!res.ok) {
+      console.error(`[gateway-tokens] Compensation failed: ${res.status}`)
+      return { success: false, error: `gateway_error_${res.status}` }
+    }
+    return res.json()
+  } catch (err) {
+    console.error('[gateway-tokens] Compensation threw:', err)
     return { success: false, error: 'gateway_unreachable' }
   }
 }

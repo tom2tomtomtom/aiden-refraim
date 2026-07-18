@@ -67,7 +67,10 @@ if (process.env.NODE_ENV !== 'production') {
       if (error) throw error;
 
       // Start processing
-      processVideoForPlatforms(video, platformsArray)
+      processVideoForPlatforms(video, platformsArray, {
+        jobId: video.id,
+        billingPath: 'plan_quota',
+      })
         .then(() => console.log('Video processing completed'))
         .catch((error) => console.error('Video processing failed:', error));
 

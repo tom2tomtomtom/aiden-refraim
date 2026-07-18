@@ -88,6 +88,23 @@ export class DatabaseService {
     return job;
   }
 
+  static async transitionProcessingJob(
+    id: string,
+    expectedStatuses: string[],
+    data: Partial<ProcessingJob>,
+  ): Promise<ProcessingJob | null> {
+    const { data: job, error } = await supabase
+      .from('processing_jobs')
+      .update(data)
+      .eq('id', id)
+      .in('status', expectedStatuses)
+      .select('*')
+      .maybeSingle();
+
+    if (error) throw error;
+    return (job as ProcessingJob | null) ?? null;
+  }
+
   static async getProcessingJob(id: string): Promise<ProcessingJob | null> {
     const { data: job, error } = await supabase
       .from('processing_jobs')
@@ -97,6 +114,80 @@ export class DatabaseService {
 
     if (error) throw error;
     return job;
+  }
+
+  /**
+   * Atomically claim one video for processing. Postgres re-checks both status
+   * predicates after any row-lock wait, so concurrent app instances cannot
+   * both turn the same idle row into an active paid run.
+   */
+  static async claimVideoForProcessing(
+    videoId: string,
+    userId: string,
+    jobId: string,
+  ): Promise<boolean> {
+    const { data, error } = await supabase
+      .from('videos')
+      .update({
+        status: 'processing',
+        platform_outputs: null,
+        processing_metadata: { active_job_id: jobId },
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', videoId)
+      .eq('user_id', userId)
+      .neq('status', 'processing')
+      .neq('status', 'PROCESSING')
+      .select('id')
+      .maybeSingle();
+
+    if (error) throw error;
+    return Boolean(data);
+  }
+
+  /**
+   * Release only the run that still owns the video. The JSONB ownership
+   * predicate fences a delayed worker from overwriting a recovered or newer
+   * run without requiring a schema change.
+   */
+  static async releaseVideoProcessing(
+    videoId: string,
+    userId: string,
+    jobId: string,
+    data: Partial<Video>,
+  ): Promise<boolean> {
+    const { data: released, error } = await supabase
+      .from('videos')
+      .update({
+        ...data,
+        processing_metadata: data.processing_metadata ?? null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', videoId)
+      .eq('user_id', userId)
+      .contains('processing_metadata', { active_job_id: jobId })
+      .select('id')
+      .maybeSingle();
+
+    if (error) throw error;
+    return Boolean(released);
+  }
+
+  static async getLatestProcessingJob(
+    videoId: string,
+    userId: string,
+  ): Promise<ProcessingJob | null> {
+    const { data, error } = await supabase
+      .from('processing_jobs')
+      .select('*')
+      .eq('video_id', videoId)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    return (data as ProcessingJob | null) ?? null;
   }
 
   static async getUserVideos(userId: string): Promise<Video[]> {
