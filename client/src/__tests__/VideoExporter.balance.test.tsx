@@ -38,6 +38,11 @@ describe('VideoExporter balance refresh event', () => {
     });
     mocks.api.getVideo.mockResolvedValue({ platform_outputs: null });
     mocks.api.processVideo.mockResolvedValue({ id: 'job-1' });
+    mocks.api.getProcessingStatus.mockResolvedValue({
+      status: 'uploaded',
+      progress: 0,
+      platforms: {},
+    });
   });
 
   afterEach(() => {
@@ -87,6 +92,54 @@ describe('VideoExporter balance refresh event', () => {
 
     expect(onBalanceRefresh).not.toHaveBeenCalled();
     window.removeEventListener('aiden:balance-refresh', onBalanceRefresh);
+    view.unmount();
+  });
+
+  it('resumes polling an active job after reload without starting a second export', async () => {
+    mocks.api.getProcessingStatus
+      .mockResolvedValueOnce({
+        status: 'processing',
+        progress: 40,
+        platforms: {},
+        jobId: 'job-1',
+      })
+      .mockResolvedValue({
+        status: 'processing',
+        progress: 50,
+        platforms: {},
+        jobId: 'job-1',
+      });
+
+    const view = render(<VideoExporter />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('button', { name: 'Exporting...' })).toBeDisabled();
+    expect(mocks.api.processVideo).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(mocks.api.getProcessingStatus).toHaveBeenCalledTimes(2);
+    view.unmount();
+  });
+
+  it('surfaces the current run failure returned during reload recovery', async () => {
+    mocks.api.getProcessingStatus.mockResolvedValue({
+      status: 'failed',
+      progress: 100,
+      platforms: {},
+      jobId: 'job-1',
+      error: 'This export did not complete. You were not charged. Please retry.',
+    });
+
+    const view = render(<VideoExporter />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/You were not charged/i)).toBeInTheDocument();
+    expect(mocks.api.processVideo).not.toHaveBeenCalled();
     view.unmount();
   });
 });

@@ -3,6 +3,7 @@ import { useVideo } from '../../contexts/VideoContext';
 import { useFocusPoints } from '../../contexts/FocusPointsContext';
 import { useApi } from '../../contexts/ApiContext';
 import { OUTPUT_FORMATS, ExportQuality } from '../../types/video';
+import type { ProcessingStatus } from '../../api';
 
 interface PlanState {
   plan: string;
@@ -31,6 +32,7 @@ export default function VideoExporter() {
   const [isExporting, setIsExporting] = useState(false);
   const [isUpgrading, setIsUpgrading] = useState(false);
   const [exportProgress, setExportProgress] = useState<Record<string, { status: string; progress: number; url?: string; error?: string }>>({});
+  const [aggregateProgress, setAggregateProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [plan, setPlan] = useState<PlanState | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -70,16 +72,89 @@ export default function VideoExporter() {
     }
   }, [api, videoId]);
 
+  const stopPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }, []);
+
+  const applyProcessingStatus = useCallback((
+    status: ProcessingStatus,
+    notifyBalance = true,
+  ): boolean => {
+    const platforms = status.platforms || {};
+    setExportProgress(prev => ({ ...prev, ...platforms }));
+    setAggregateProgress(status.progress || 0);
+    if (status.error) setError(status.error);
+
+    const entries = Object.values(platforms);
+    const allDone = entries.length > 0 && entries.every(
+      p => p.status === 'complete' || p.status === 'error'
+    );
+    const normalizedStatus = status.status.toLowerCase();
+    const terminal = allDone
+      || normalizedStatus === 'completed'
+      || normalizedStatus === 'complete'
+      || normalizedStatus === 'failed'
+      || normalizedStatus === 'error';
+    if (!terminal) return false;
+
+    stopPolling();
+    setIsExporting(false);
+    if (notifyBalance && entries.some(p => p.status === 'complete')) {
+      window.dispatchEvent(new Event('aiden:balance-refresh'));
+    }
+    refreshPlan();
+    hydrateOutputs();
+    return true;
+  }, [hydrateOutputs, refreshPlan, stopPolling]);
+
+  const pollStatus = useCallback(async () => {
+    if (!api || !videoId) return;
+    try {
+      const status = await api.getProcessingStatus(videoId);
+      applyProcessingStatus(status);
+    } catch {
+      stopPolling();
+      setIsExporting(false);
+      setError('Failed to check processing status');
+    }
+  }, [api, videoId, applyProcessingStatus, stopPolling]);
+
+  const startPolling = useCallback(() => {
+    stopPolling();
+    pollIntervalRef.current = setInterval(() => {
+      void pollStatus();
+    }, 3000);
+  }, [pollStatus, stopPolling]);
+
   useEffect(() => {
     refreshPlan();
     hydrateOutputs();
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
+    let cancelled = false;
+
+    const recoverActiveExport = async () => {
+      if (!api || !videoId) return;
+      try {
+        const status = await api.getProcessingStatus(videoId);
+        if (cancelled) return;
+        applyProcessingStatus(status, false);
+        if (status.status.toLowerCase() === 'processing') {
+          setIsExporting(true);
+          startPolling();
+        }
+      } catch {
+        // Non-fatal when there is no current job. A new export still works.
       }
     };
-  }, [refreshPlan, hydrateOutputs]);
+    void recoverActiveExport();
+
+    return () => {
+      cancelled = true;
+      stopPolling();
+    };
+  }, [api, videoId, refreshPlan, hydrateOutputs, applyProcessingStatus, startPolling, stopPolling]);
 
   const togglePlatform = (platform: string) => {
     setSelectedPlatforms(prev =>
@@ -92,6 +167,7 @@ export default function VideoExporter() {
     setIsExporting(true);
     setError(null);
     setExportProgress({});
+    setAggregateProgress(0);
 
     try {
       await api.processVideo(videoId, {
@@ -100,51 +176,7 @@ export default function VideoExporter() {
         quality,
       });
 
-      // Poll for status
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
-      pollIntervalRef.current = setInterval(async () => {
-        try {
-          const status = await api.getProcessingStatus(videoId);
-          const platforms = status.platforms || {};
-          // Merge, never replace: a sparse mid-flight poll must not wipe
-          // entries that have already reached 'complete'.
-          setExportProgress(prev => ({ ...prev, ...platforms }));
-
-          // An EMPTY platforms map must not count as "all done" — every() is
-          // vacuously true on an empty array, which used to stop the poll
-          // before any progress was recorded and hide the download links.
-          const entries = Object.values(platforms);
-          const allDone = entries.length > 0 && entries.every(
-            p => p.status === 'complete' || p.status === 'error'
-          );
-          const hasSuccessfulOutput = entries.some(p => p.status === 'complete');
-          if (allDone || status.status === 'completed' || status.status === 'failed') {
-            if (pollIntervalRef.current) {
-              clearInterval(pollIntervalRef.current);
-              pollIntervalRef.current = null;
-            }
-            setIsExporting(false);
-            // Server terminal publication now happens after token settlement.
-            // Only a run with usable output can have charged Gateway tokens.
-            if (hasSuccessfulOutput) {
-              window.dispatchEvent(new Event('aiden:balance-refresh'));
-            }
-            refreshPlan();
-            // Guarantee the finished outputs (with download URLs) render even
-            // if the transient status was sparse at the moment we stopped.
-            hydrateOutputs();
-          }
-        } catch {
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            pollIntervalRef.current = null;
-          }
-          setIsExporting(false);
-          setError('Failed to check processing status');
-        }
-      }, 3000);
+      startPolling();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Export failed');
       setIsExporting(false);
@@ -153,7 +185,7 @@ export default function VideoExporter() {
       // the real remaining quota.
       refreshPlan();
     }
-  }, [api, videoId, selectedPlatforms, useLetterboxing, quality, refreshPlan, hydrateOutputs]);
+  }, [api, videoId, selectedPlatforms, useLetterboxing, quality, refreshPlan, startPolling]);
 
   const handleUpgrade = useCallback(async () => {
     if (!api || !plan) return;
@@ -183,7 +215,7 @@ export default function VideoExporter() {
 
   const overallProgress = Object.values(exportProgress).length > 0
     ? Math.round(Object.values(exportProgress).reduce((sum, p) => sum + (p.progress || 0), 0) / Object.values(exportProgress).length)
-    : 0;
+    : aggregateProgress;
 
   const allowanceExhausted = plan != null && plan.exports_limit !== -1 && plan.exports_remaining !== null && plan.exports_remaining <= 0;
   // Tokens are a legitimate billing path once the allowance is used —

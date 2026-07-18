@@ -16,6 +16,20 @@ export interface ProcessingJob {
   updated_at: string;
 }
 
+export interface ProcessingStatus {
+  status: string;
+  progress: number;
+  platforms: Record<string, {
+    status: string;
+    progress: number;
+    url?: string;
+    error?: string;
+  }>;
+  jobId?: string;
+  error?: string;
+  reconciling?: boolean;
+}
+
 export interface Video {
   id: string;
   user_id: string;
@@ -259,7 +273,7 @@ export class ApiClient {
     });
   }
 
-  async getProcessingStatus(videoId: string): Promise<{ status: string; progress: number; platforms: Record<string, { status: string; progress: number; url?: string; error?: string }> }> {
+  async getProcessingStatus(videoId: string): Promise<ProcessingStatus> {
     return this.request(`/videos/${videoId}/status`);
   }
 
