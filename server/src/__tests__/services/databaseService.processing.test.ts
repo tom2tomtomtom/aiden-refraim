@@ -8,10 +8,11 @@ const chain = {
   order: jest.fn(),
   limit: jest.fn(),
   maybeSingle: jest.fn(),
+  delete: jest.fn(),
 };
 const mockFrom = jest.fn((_table?: string) => chain);
 
-for (const method of ['update', 'eq', 'neq', 'in', 'contains', 'select', 'order', 'limit'] as const) {
+for (const method of ['update', 'eq', 'neq', 'in', 'contains', 'select', 'order', 'limit', 'delete'] as const) {
   chain[method].mockReturnValue(chain);
 }
 
@@ -24,7 +25,7 @@ import { DatabaseService } from '../../services/databaseService';
 describe('DatabaseService processing claim', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    for (const method of ['update', 'eq', 'neq', 'in', 'contains', 'select', 'order', 'limit'] as const) {
+    for (const method of ['update', 'eq', 'neq', 'in', 'contains', 'select', 'order', 'limit', 'delete'] as const) {
       chain[method].mockReturnValue(chain);
     }
   });
@@ -96,5 +97,18 @@ describe('DatabaseService processing claim', () => {
     )).resolves.toEqual(job);
 
     expect(chain.in).toHaveBeenCalledWith('status', ['publishing_gateway_tokens']);
+  });
+
+  it('deletes a video only when its row is still idle at the final write', async () => {
+    chain.maybeSingle.mockResolvedValue({ data: { id: 'video-1' }, error: null });
+
+    await expect(DatabaseService.deleteVideoIfIdle('video-1', 'user-1'))
+      .resolves.toBe(true);
+
+    expect(mockFrom).toHaveBeenCalledWith('processing_jobs');
+    expect(mockFrom).toHaveBeenCalledWith('videos');
+    expect(chain.eq).toHaveBeenCalledWith('user_id', 'user-1');
+    expect(chain.neq).toHaveBeenCalledWith('status', 'processing');
+    expect(chain.neq).toHaveBeenCalledWith('status', 'PROCESSING');
   });
 });

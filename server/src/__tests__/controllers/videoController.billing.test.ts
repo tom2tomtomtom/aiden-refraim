@@ -17,6 +17,8 @@ const mockCompensateTokens = jest.fn();
 const mockRecordCostEvent = jest.fn();
 const mockSignVideoRecord = jest.fn();
 const mockGetSignedUrl = jest.fn();
+const mockDeleteStoredVideo = jest.fn();
+const mockDeleteVideoIfIdle = jest.fn();
 const JOB_ID = '33333333-3333-4333-8333-333333333333';
 
 jest.mock('node:crypto', () => ({ randomUUID: () => JOB_ID }));
@@ -29,6 +31,7 @@ jest.mock('../../services/storageService', () => ({
   StorageService: {
     signVideoRecord: (...args: unknown[]) => mockSignVideoRecord(...args),
     getSignedUrl: (...args: unknown[]) => mockGetSignedUrl(...args),
+    deleteVideo: (...args: unknown[]) => mockDeleteStoredVideo(...args),
   },
 }));
 
@@ -42,6 +45,7 @@ jest.mock('../../services/databaseService', () => ({
     transitionProcessingJob: (...args: unknown[]) => mockTransitionProcessingJob(...args),
     updateVideo: (...args: unknown[]) => mockUpdateVideo(...args),
     releaseVideoProcessing: (...args: unknown[]) => mockReleaseVideoProcessing(...args),
+    deleteVideoIfIdle: (...args: unknown[]) => mockDeleteVideoIfIdle(...args),
   },
 }));
 
@@ -61,7 +65,7 @@ jest.mock('../../lib/gateway-tokens', () => ({
   recordCostEvent: (...args: unknown[]) => mockRecordCostEvent(...args),
 }));
 
-import { getVideoStatus, processVideo } from '../../controllers/videoController';
+import { deleteVideo, getVideoStatus, processVideo } from '../../controllers/videoController';
 
 function makeResponse(): Response {
   const response = {
@@ -111,6 +115,8 @@ describe('processVideo billing settlement', () => {
     mockCompensateTokens.mockResolvedValue({ success: true, newBalance: 20 });
     mockSignVideoRecord.mockImplementation(async (value) => value);
     mockGetSignedUrl.mockImplementation(async (value) => value);
+    mockDeleteStoredVideo.mockResolvedValue(undefined);
+    mockDeleteVideoIfIdle.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -377,5 +383,58 @@ describe('processVideo billing settlement', () => {
 
     expect(mockDeductTokens).not.toHaveBeenCalled();
     expect(mockCompensateTokens).not.toHaveBeenCalled();
+  });
+
+  it('refuses deletion while the video has a nonterminal billing job', async () => {
+    mockGetVideo.mockResolvedValue({
+      id: 'video-1',
+      user_id: 'user-1',
+      original_url: 'original/video-1.mp4',
+      status: 'processing',
+      processing_metadata: { active_job_id: JOB_ID },
+      platform_outputs: null,
+    });
+    mockGetLatestProcessingJob.mockResolvedValue({
+      id: JOB_ID,
+      status: 'publishing_gateway_tokens',
+      progress: 98,
+    });
+    const response = makeResponse();
+
+    await deleteVideo({
+      user: { id: 'user-1' }, params: { id: 'video-1' },
+    } as unknown as Request, response);
+
+    expect(response.status).toHaveBeenCalledWith(409);
+    expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+      error: expect.stringMatching(/processing|restoring/i),
+      retryable: true,
+    }));
+    expect(mockDeleteVideoIfIdle).not.toHaveBeenCalled();
+    expect(mockDeleteStoredVideo).not.toHaveBeenCalled();
+  });
+
+  it('returns a conflict when processing wins the final database delete race', async () => {
+    mockGetVideo.mockResolvedValue({
+      id: 'video-1',
+      user_id: 'user-1',
+      original_url: 'original/video-1.mp4',
+      status: 'UPLOADED',
+      processing_metadata: null,
+      platform_outputs: null,
+    });
+    mockGetLatestProcessingJob.mockResolvedValue({
+      id: 'old-job', status: 'completed', progress: 100,
+    });
+    mockDeleteVideoIfIdle.mockResolvedValue(false);
+    const response = makeResponse();
+
+    await deleteVideo({
+      user: { id: 'user-1' }, params: { id: 'video-1' },
+    } as unknown as Request, response);
+
+    expect(mockDeleteVideoIfIdle).toHaveBeenCalledWith('video-1', 'user-1');
+    expect(response.status).toHaveBeenCalledWith(409);
+    expect(mockDeleteStoredVideo).not.toHaveBeenCalled();
   });
 });

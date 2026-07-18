@@ -201,6 +201,38 @@ export class DatabaseService {
     return videos;
   }
 
+  /**
+   * Delete only while the video is still idle at the database write. Terminal
+   * jobs are removed first to satisfy the existing FK; an active claimant
+   * changes videos.status to processing, so the final conditional delete loses
+   * safely if processing starts after the controller's initial read.
+   */
+  static async deleteVideoIfIdle(id: string, userId: string): Promise<boolean> {
+    const terminalStatuses = [
+      'completed', 'complete', 'failed', 'error',
+      'COMPLETE', 'ERROR', 'failed_compensated',
+    ];
+    const { error: jobsError } = await supabase
+      .from('processing_jobs')
+      .delete()
+      .eq('video_id', id)
+      .eq('user_id', userId)
+      .in('status', terminalStatuses);
+    if (jobsError) throw jobsError;
+
+    const { data: deleted, error } = await supabase
+      .from('videos')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId)
+      .neq('status', 'processing')
+      .neq('status', 'PROCESSING')
+      .select('id')
+      .maybeSingle();
+    if (error) throw error;
+    return Boolean(deleted);
+  }
+
   static async deleteVideo(id: string): Promise<void> {
     // Remove dependent processing_jobs first. The FK
     // processing_jobs_video_id_fkey has no ON DELETE CASCADE, so deleting a

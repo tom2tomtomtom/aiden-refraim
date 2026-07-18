@@ -740,7 +740,34 @@ export const deleteVideo = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    // Delete from storage
+    const latestJob = await DatabaseService.getLatestProcessingJob(id, user.id);
+    const videoStatus = String(video.status).toLowerCase();
+    const activeJobId = (video.processing_metadata as { active_job_id?: unknown } | null)
+      ?.active_job_id;
+    if (
+      videoStatus === 'processing'
+      || typeof activeJobId === 'string'
+      || (latestJob && !isTerminalJobStatus(latestJob.status))
+    ) {
+      return res.status(409).json({
+        error: 'This video is still processing or restoring billing. Wait for it to finish before deleting.',
+        retryable: true,
+      });
+    }
+
+    // Win the final database race before removing storage. A processing claim
+    // that starts after the reads above changes videos.status to processing,
+    // causing this conditional delete to return false without losing data.
+    const deleted = await DatabaseService.deleteVideoIfIdle(id, user.id);
+    if (!deleted) {
+      return res.status(409).json({
+        error: 'This video started processing. Wait for it to finish before deleting.',
+        retryable: true,
+      });
+    }
+
+    // The database row is gone, so no worker can establish a new paid claim.
+    // Storage cleanup can now run without racing a new export.
     await StorageService.deleteVideo(video.original_url);
     if (video.platform_outputs) {
       const outputs = Object.values(video.platform_outputs) as Array<{ url?: string }>;
@@ -750,9 +777,6 @@ export const deleteVideo = async (req: Request, res: Response) => {
         }
       }
     }
-
-    // Delete from database
-    await DatabaseService.deleteVideo(id);
 
     res.status(204).send();
   } catch (error) {
