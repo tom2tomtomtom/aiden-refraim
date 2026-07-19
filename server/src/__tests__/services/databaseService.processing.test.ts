@@ -144,6 +144,10 @@ describe('DatabaseService processing claim', () => {
     expect(mockFrom).toHaveBeenCalledWith('processing_jobs');
     expect(mockFrom).toHaveBeenCalledWith('videos');
     expect(chain.eq).toHaveBeenCalledWith('user_id', 'user-1');
+    expect(chain.in).toHaveBeenCalledWith('status', [
+      'completed', 'complete', 'failed', 'error',
+      'COMPLETE', 'ERROR', 'failed_compensated', 'failed_allowance_refunded',
+    ]);
     expect(chain.neq).toHaveBeenCalledWith('status', 'processing');
     expect(chain.neq).toHaveBeenCalledWith('status', 'PROCESSING');
   });

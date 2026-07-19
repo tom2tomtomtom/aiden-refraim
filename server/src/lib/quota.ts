@@ -79,20 +79,17 @@ async function ensureBillingRow(userId: string): Promise<BillingRow> {
   return inserted as BillingRow;
 }
 
-async function maybeResetMonth(row: BillingRow): Promise<BillingRow> {
+function currentPeriodView(row: BillingRow): BillingRow {
   if (!isStale(row.exports_reset_at)) return row;
   const nowIso = new Date().toISOString();
-  const { data } = await supabase
-    .from('user_billing')
-    .update({ exports_this_month: 0, exports_reset_at: nowIso, updated_at: nowIso })
-    .eq('user_id', row.user_id)
-    .select('user_id, stripe_price_id, exports_this_month, exports_reset_at')
-    .single();
-  return (data as BillingRow) ?? { ...row, exports_this_month: 0, exports_reset_at: nowIso };
+  // This is a read-only projection for plan display/routing. The reservation
+  // RPC owns the durable rollover while holding the billing row lock, so a
+  // delayed status read can never erase another request's increment.
+  return { ...row, exports_this_month: 0, exports_reset_at: nowIso };
 }
 
 export async function getQuotaState(userId: string): Promise<QuotaState> {
-  const row = await maybeResetMonth(await ensureBillingRow(userId));
+  const row = currentPeriodView(await ensureBillingRow(userId));
   const plan = resolvePlanKey(row.stripe_price_id);
   const limit = PLANS[plan].exportsPerMonth;
   const used = row.exports_this_month ?? 0;
@@ -108,6 +105,7 @@ export async function getQuotaState(userId: string): Promise<QuotaState> {
 type ReservationRpcResult = {
   reserved?: boolean;
   used?: number;
+  resets_at?: string;
 };
 
 type RecoveryRpcResult = {
@@ -142,6 +140,7 @@ export async function reserveExportForJob(
   return {
     ...state,
     used,
+    resetsAt: typeof result.resets_at === 'string' ? result.resets_at : state.resetsAt,
     remaining: state.limit === -1
       ? Number.POSITIVE_INFINITY
       : Math.max(0, state.limit - used),
@@ -172,54 +171,4 @@ export async function recoverPlanQuotaExport(
     recovered: Boolean(result?.recovered),
     refunded: Boolean(result?.refunded),
   };
-}
-
-/**
- * Reserve one export slot atomically if the user has quota. Returns the
- * post-increment state on success, or `null` when the cap is hit.
- *
- * Not fully race-safe (two concurrent calls could each pass the read
- * check), but sufficient for a free-tier gate. A single user rapid-firing
- * exports might slip by 1 over the cap, which is well under the tolerance
- * we need. Use a Postgres RPC (SELECT ... FOR UPDATE, or a SECURITY DEFINER
- * function) if this becomes a billing integrity concern.
- */
-export async function reserveExport(userId: string): Promise<QuotaState | null> {
-  const state = await getQuotaState(userId);
-  if (state.limit !== -1 && state.used >= state.limit) {
-    return null;
-  }
-
-  const nowIso = new Date().toISOString();
-  const nextUsed = state.used + 1;
-  const { error } = await supabase
-    .from('user_billing')
-    .update({ exports_this_month: nextUsed, updated_at: nowIso })
-    .eq('user_id', userId);
-  if (error) throw error;
-
-  return {
-    ...state,
-    used: nextUsed,
-    remaining: state.limit === -1 ? Number.POSITIVE_INFINITY : Math.max(0, state.limit - nextUsed),
-  };
-}
-
-/**
- * Credit one export slot back to the user. Call this if the job fails in a
- * way where the user shouldn't have been charged (hard crash, platform
- * rejected invalid input, etc.). No-op if balance would go negative.
- */
-export async function refundExport(userId: string): Promise<void> {
-  const { data } = await supabase
-    .from('user_billing')
-    .select('exports_this_month')
-    .eq('user_id', userId)
-    .maybeSingle();
-  const current = data?.exports_this_month ?? 0;
-  if (current <= 0) return;
-  await supabase
-    .from('user_billing')
-    .update({ exports_this_month: current - 1, updated_at: new Date().toISOString() })
-    .eq('user_id', userId);
 }

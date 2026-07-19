@@ -272,7 +272,7 @@ export class DatabaseService {
   static async deleteVideoIfIdle(id: string, userId: string): Promise<boolean> {
     const terminalStatuses = [
       'completed', 'complete', 'failed', 'error',
-      'COMPLETE', 'ERROR', 'failed_compensated',
+      'COMPLETE', 'ERROR', 'failed_compensated', 'failed_allowance_refunded',
     ];
     const { error: jobsError } = await supabase
       .from('processing_jobs')
