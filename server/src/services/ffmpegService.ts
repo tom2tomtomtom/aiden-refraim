@@ -134,7 +134,8 @@ export class FFmpegService {
     inputUrl: string,
     outputPath: string,
     format: ProcessingFormat,
-    focusRegion: { x: number; y: number; width: number; height: number }
+    focusRegion: { x: number; y: number; width: number; height: number },
+    platform: string
   ): Promise<string> {
     // Download video to temp location
     const tempInputPath = path.join('/tmp', `input-${Date.now()}.mp4`);
@@ -199,11 +200,9 @@ export class FFmpegService {
 
         try {
           // Upload processed video to storage
-          const platform = path.basename(outputPath, path.extname(outputPath)).split('-')[1];
           const outputUrl = await StorageService.uploadProcessedVideo(
             outputPath,
-            platform,
-            path.basename(inputUrl)
+            platform
           );
           resolve(outputUrl);
         } catch (error) {

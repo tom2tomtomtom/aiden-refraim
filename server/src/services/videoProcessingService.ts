@@ -53,11 +53,13 @@ export interface ProcessingOutcome {
 }
 
 export type BeforePublish = (outcome: ProcessingOutcome) => Promise<void>;
+export type AfterPublish = (outcome: ProcessingOutcome) => Promise<boolean>;
 
 export interface ProcessingRunContext {
   jobId: string;
   billingPath: 'plan_quota' | 'gateway_tokens';
   beforePublish?: BeforePublish;
+  afterPublish?: AfterPublish;
 }
 
 export interface VideoAnalyzer {
@@ -228,7 +230,8 @@ class BasicVideoProcessor implements VideoProcessor {
               bitrate: format.bitrate,
               metadata: analysisResult.metadata
             },
-            analysisResult.focusRegion ?? { x: 0, y: 0, width: 0, height: 0 }
+            analysisResult.focusRegion ?? { x: 0, y: 0, width: 0, height: 0 },
+            platform
           );
 
           platformOutputs[platform] = {
@@ -318,9 +321,14 @@ class BasicVideoProcessor implements VideoProcessor {
       const finalStatus = Object.values(platformOutputs).some(output => output.status === 'error')
         ? 'failed'
         : 'completed';
-      await this.updateVideoStatus(
-        video.id, finalStatus, undefined, 100, context.jobId, [publishingStatus],
-      );
+      const finalizedByCaller = context.afterPublish
+        ? await context.afterPublish(outcome)
+        : false;
+      if (!finalizedByCaller) {
+        await this.updateVideoStatus(
+          video.id, finalStatus, undefined, 100, context.jobId, [publishingStatus],
+        );
+      }
       return outcome;
     } catch (error) {
       console.error('Video processing failed:', error);
@@ -464,7 +472,8 @@ class BasicVideoProcessor implements VideoProcessor {
                 bitrate: format.bitrate,
                 metadata: analysisResult.metadata,
               },
-              fallbackRegion
+              fallbackRegion,
+              platform
             );
           }
 

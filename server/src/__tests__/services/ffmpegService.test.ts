@@ -1,3 +1,11 @@
+import { EventEmitter } from 'events';
+
+const mockSpawn = jest.fn();
+
+jest.mock('child_process', () => ({
+  spawn: (...args: unknown[]) => mockSpawn(...args),
+}));
+
 // Mock storageService (transitive dep via ffmpegService -> storageService -> supabase)
 jest.mock('../../services/storageService', () => ({
   StorageService: {
@@ -176,5 +184,53 @@ describe('FFmpegService.buildCropFilter', () => {
     expect(filter).toContain('scale=1080:1920');
     expect(filter).not.toContain('pad=');
     expect(filter).not.toContain('force_original_aspect_ratio');
+  });
+});
+
+describe('FFmpegService.processVideo upload contract', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSpawn.mockImplementation((command: string) => {
+      const process = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+      };
+      process.stdout = new EventEmitter();
+      process.stderr = new EventEmitter();
+      setImmediate(() => {
+        if (command === 'ffprobe') {
+          process.stdout.emit('data', Buffer.from(JSON.stringify({
+            streams: [{
+              width: 1920,
+              height: 1080,
+              duration: '10',
+              r_frame_rate: '30/1',
+            }],
+          })));
+        }
+        process.emit('close', 0);
+      });
+      return process;
+    });
+  });
+
+  it('passes the requested platform to storage instead of parsing the UUID filename', async () => {
+    const { StorageService } = require('../../services/storageService');
+    StorageService.downloadVideo.mockResolvedValue(undefined);
+    StorageService.uploadProcessedVideo.mockResolvedValue('processed/output.mp4');
+    const outputPath = '/tmp/59fc1b71-3a01-41f4-ba2f-b75efbcaddfb-instagram-story.mp4';
+
+    await FFmpegService.processVideo(
+      'https://signed.example/input.mp4?token=sig',
+      outputPath,
+      { width: 1080, height: 1920, aspectRatio: '9:16' },
+      { x: 0, y: 0, width: 1920, height: 1080 },
+      'instagram-story',
+    );
+
+    expect(StorageService.uploadProcessedVideo).toHaveBeenCalledWith(
+      outputPath,
+      'instagram-story',
+    );
   });
 });

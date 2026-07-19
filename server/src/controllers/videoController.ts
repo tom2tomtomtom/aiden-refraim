@@ -78,6 +78,15 @@ function isPlanQuotaRecoveryStatus(status: unknown): boolean {
     || normalized === 'publishing_no_charge_plan_quota';
 }
 
+function isPlanQuotaRecoveryReady(job: {
+  status?: unknown;
+  updated_at?: string;
+  created_at?: string;
+}): boolean {
+  return String(job.status ?? '').toLowerCase() === 'publishing_no_charge_plan_quota'
+    || isTimestampStale(job.updated_at, job.created_at, PROCESSING_JOB_STALE_MS);
+}
+
 function isLegacyAmbiguousQuotaStatus(status: unknown): boolean {
   const normalized = String(status ?? '').toLowerCase();
   return normalized === 'pending'
@@ -350,7 +359,7 @@ export const getVideoStatus = async (req: Request, res: Response) => {
     } else if (
       job
       && isPlanQuotaRecoveryStatus(job.status)
-      && isTimestampStale(job.updated_at, job.created_at, PROCESSING_JOB_STALE_MS)
+      && isPlanQuotaRecoveryReady(job)
     ) {
       const jobId = job.id;
       const recovery = await recoverPlanQuotaExport(user.id, id, jobId, false);
@@ -784,10 +793,8 @@ export const processVideo = async (req: Request, res: Response) => {
 
     // Start processing asynchronously; deduct tokens only when at least one
     // output succeeds, and before that output becomes visible to the client.
-    // We do NOT refund the Stripe plan quota on failure. The work was
-    // attempted and the FFmpeg cost was paid. If the failure is a hard
-    // infra error (quota-gate followed by a server crash), the user can
-    // retry within the month cap.
+    // Plan allowance is restored atomically when no usable output is
+    // published; the reservation receipt makes recovery idempotent.
     processVideoForPlatforms(video, platforms, {
       jobId: processingJob.id,
       billingPath,
@@ -855,9 +862,62 @@ export const processVideo = async (req: Request, res: Response) => {
           throw new Error('Processing publication phase is no longer active');
         }
       },
+      afterPublish: async (outcome) => {
+        if (billingPath !== 'plan_quota' || outcome.successfulOutputs > 0) {
+          return false;
+        }
+        const recovery = await recoverPlanQuotaExport(
+          user.id,
+          id,
+          processingJob.id,
+          false,
+        );
+        if (!recovery.recovered) {
+          throw new Error('Plan allowance recovery is still pending');
+        }
+        return true;
+      },
     })
       .catch(async (error) => {
         console.error(error);
+        if (!chargeGatewayTokens) {
+          try {
+            const recovery = await recoverPlanQuotaExport(
+              user.id,
+              id,
+              processingJob.id,
+              false,
+            );
+            if (!recovery.recovered) {
+              console.error('Plan allowance recovery remains pending');
+            }
+          } catch (recoveryError) {
+            console.error('Could not restore plan allowance yet:', recoveryError);
+          }
+          if (process.env.AIDEN_SERVICE_KEY) {
+            try {
+              await recordCostEvent({
+                userId: user.id,
+                requestId,
+                idempotencyKey: `railway:${requestId}:failed`,
+                providerTaskId: processingJob.id,
+                status: 'failed',
+                computeSeconds: (Date.now() - processingStartedAt) / 1000,
+                metadata: {
+                  reason: 'video_processing_failed',
+                  platformCount: platforms.length,
+                  billingPath: 'stripe_plan',
+                },
+              });
+            } catch (costError) {
+              console.error('Could not record failed plan export cost:', costError);
+            }
+          }
+          // Keep a failed recovery in its durable phase. The status endpoint
+          // retries no-output publication recovery immediately and other plan
+          // phases after the stale timeout.
+          return;
+        }
         let currentVideo;
         try {
           currentVideo = await DatabaseService.getVideo(id);

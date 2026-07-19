@@ -27,6 +27,7 @@ jest.mock('fs', () => {
     existsSync: jest.fn().mockReturnValue(true),
     statSync: jest.fn().mockReturnValue({ size: 1024, birthtime: new Date(), mtime: new Date() }),
     readFileSync: jest.fn().mockReturnValue(Buffer.from('fake-video-data')),
+    unlink: jest.fn((_path: string, callback: (error: null) => void) => callback(null)),
     unlinkSync: jest.fn(),
     promises: {
       ...actual.promises,
@@ -103,6 +104,33 @@ describe('StorageService', () => {
     it('accepts .avi files', async () => {
       const url = await StorageService.uploadVideo('/tmp/test.avi', 'video.avi');
       expect(url).toBe('https://example.com/test.mp4');
+    });
+  });
+
+  describe('uploadProcessedVideo', () => {
+    it('uses the rendered output extension for storage MIME metadata', async () => {
+      const { supabase } = require('../../config/supabase');
+      const upload = jest.fn().mockResolvedValue({
+        data: { path: 'processed/instagram-story/output.mp4' },
+        error: null,
+      });
+      supabase.storage.from.mockReturnValue({
+        upload,
+        getPublicUrl: jest.fn().mockReturnValue({
+          data: { publicUrl: 'https://example.com/output.mp4' },
+        }),
+      });
+
+      await StorageService.uploadProcessedVideo(
+        '/tmp/video-instagram-story.mp4',
+        'instagram-story',
+      );
+
+      expect(upload).toHaveBeenCalledWith(
+        expect.stringMatching(/processed\/instagram-story\/.*\.mp4$/),
+        expect.any(Buffer),
+        expect.objectContaining({ contentType: 'video/mp4' }),
+      );
     });
   });
 

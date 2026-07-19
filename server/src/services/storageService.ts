@@ -242,13 +242,12 @@ export class StorageService {
 
   static async uploadProcessedVideo(
     filePath: string,
-    platform: string,
-    originalFileName: string
+    platform: string
   ): Promise<string> {
     try {
       // Read file as buffer
       const fileBuffer = fs.readFileSync(filePath);
-      const fileExt = path.extname(originalFileName);
+      const fileExt = path.extname(filePath);
       const uniqueFileName = `${Date.now()}_${platform}${fileExt}`;
       
       console.log('Uploading processed video:', {

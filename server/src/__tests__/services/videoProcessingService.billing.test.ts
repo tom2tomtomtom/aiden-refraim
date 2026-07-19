@@ -154,6 +154,33 @@ describe('video processing billing publication boundary', () => {
     consoleError.mockRestore();
   });
 
+  it('lets plan-quota recovery finalize an all-failed job after output publication', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const afterPublish = jest.fn(async () => {
+      expect(mockDbUpdates).toContainEqual(expect.objectContaining({
+        table: 'videos',
+        data: expect.objectContaining({ status: 'failed' }),
+      }));
+      return true;
+    });
+    mockProcessVideo.mockRejectedValue(new Error('ffmpeg failed'));
+
+    const outcome = await videoProcessor.process(video, ['instagram-story'], {
+      jobId: 'job-1',
+      billingPath: 'plan_quota',
+      beforePublish: async () => {},
+      afterPublish,
+    } as any);
+
+    expect(outcome).toEqual({ successfulOutputs: 0, failedOutputs: 1 });
+    expect(afterPublish).toHaveBeenCalledWith(outcome);
+    expect(mockDbUpdates).not.toContainEqual(expect.objectContaining({
+      table: 'processing_jobs',
+      data: expect.objectContaining({ status: 'failed' }),
+    }));
+    consoleError.mockRestore();
+  });
+
   it('leaves settlement failure finalization to the durable controller recovery path', async () => {
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
     mockProcessVideo.mockResolvedValue('processed/video-1-story.mp4');

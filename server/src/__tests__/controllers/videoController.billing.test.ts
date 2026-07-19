@@ -213,6 +213,33 @@ describe('processVideo billing settlement', () => {
     );
   });
 
+  it('restores plan allowance immediately when every requested output fails', async () => {
+    mockGetQuotaState.mockResolvedValue({
+      plan: 'free', used: 1, limit: 3, remaining: 2,
+    });
+    mockReserveExport.mockResolvedValue({
+      plan: 'free', used: 2, limit: 3, remaining: 1,
+    });
+    mockProcessVideoForPlatforms.mockImplementation(async (_video, _platforms, context) => {
+      const outcome = { successfulOutputs: 0, failedOutputs: 1 };
+      await context.beforePublish(outcome);
+      expect(await context.afterPublish(outcome)).toBe(true);
+      return outcome;
+    });
+
+    await processVideo({
+      user: { id: 'user-1', email: 'user@example.com' },
+      params: { id: 'video-1' },
+      body: { platforms: ['instagram-story'] },
+    } as unknown as Request, makeResponse());
+    await flushBackgroundWork();
+
+    expect(mockRecoverPlanQuotaExport).toHaveBeenCalledWith(
+      'user-1', 'video-1', JOB_ID, false,
+    );
+    expect(mockDeductTokens).not.toHaveBeenCalled();
+  });
+
   it('returns the active job on a concurrent reload without reserving or starting again', async () => {
     mockClaimVideoForProcessing.mockResolvedValue(false);
     mockGetLatestProcessingJob.mockResolvedValue({
@@ -471,6 +498,39 @@ describe('processVideo billing settlement', () => {
     );
   });
 
+  it('restores plan allowance after a pre-publication processing error', async () => {
+    mockGetQuotaState.mockResolvedValue({
+      plan: 'free', used: 1, limit: 3, remaining: 2,
+    });
+    mockReserveExport.mockResolvedValue({
+      plan: 'free', used: 2, limit: 3, remaining: 1,
+    });
+    mockProcessVideoForPlatforms.mockRejectedValue(new Error('analysis failed'));
+
+    await processVideo({
+      user: { id: 'user-1' },
+      params: { id: 'video-1' },
+      body: { platforms: ['instagram-story'] },
+    } as unknown as Request, makeResponse());
+    await flushBackgroundWork();
+
+    expect(mockRecoverPlanQuotaExport).toHaveBeenCalledWith(
+      'user-1', 'video-1', JOB_ID, false,
+    );
+    expect(mockRecordCostEvent).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'user-1',
+      requestId: JOB_ID,
+      idempotencyKey: `railway:${JOB_ID}:failed`,
+      providerTaskId: JOB_ID,
+      status: 'failed',
+      metadata: expect.objectContaining({
+        reason: 'video_processing_failed',
+        billingPath: 'stripe_plan',
+      }),
+    }));
+    expect(mockReleaseVideoProcessing).not.toHaveBeenCalled();
+  });
+
   it('recovers a stale ambiguous settlement by compensating before returning failure', async () => {
     mockGetVideo.mockResolvedValue({
       id: 'video-1', user_id: 'user-1', status: 'processing', platform_outputs: null,
@@ -705,6 +765,43 @@ describe('processVideo billing settlement', () => {
     expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
       status: 'failed', jobId: JOB_ID,
     }));
+  });
+
+  it('retries a fresh no-output plan publication immediately', async () => {
+    const freshJob = {
+      id: JOB_ID,
+      video_id: 'video-1',
+      user_id: 'user-1',
+      status: 'publishing_no_charge_plan_quota',
+      progress: 98,
+      updated_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    };
+    mockGetVideo
+      .mockResolvedValueOnce({
+        id: 'video-1', user_id: 'user-1', status: 'failed',
+        platform_outputs: { 'instagram-story': { status: 'error' } },
+        processing_metadata: null,
+      })
+      .mockResolvedValueOnce({
+        id: 'video-1', user_id: 'user-1', status: 'failed',
+        platform_outputs: { 'instagram-story': { status: 'error' } },
+        processing_metadata: null,
+      });
+    mockGetLatestProcessingJob.mockResolvedValue(freshJob);
+    mockGetProcessingJob.mockResolvedValue({
+      ...freshJob,
+      status: 'failed_allowance_refunded',
+      progress: 100,
+    });
+
+    await getVideoStatus({
+      user: { id: 'user-1' }, params: { id: 'video-1' },
+    } as unknown as Request, makeResponse());
+
+    expect(mockRecoverPlanQuotaExport).toHaveBeenCalledWith(
+      'user-1', 'video-1', JOB_ID, false,
+    );
   });
 
   it('conservatively reconciles a stale ambiguous legacy job through the idempotent quota RPC', async () => {
