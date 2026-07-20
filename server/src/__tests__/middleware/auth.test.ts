@@ -13,14 +13,33 @@ function buildReqResNext(headers: Record<string, string> = {}) {
   const res = {
     status: jest.fn().mockReturnThis(),
     json: jest.fn().mockReturnThis(),
+    cookie: jest.fn().mockReturnThis(),
   } as unknown as Response;
   const next = jest.fn() as NextFunction;
   return { req, res, next };
 }
 
+function gatewayResponse(status: number, body: Record<string, unknown> = {}) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: jest.fn().mockResolvedValue(body),
+  } as unknown as globalThis.Response;
+}
+
 describe('requireAuth middleware', () => {
+  const originalFetch = global.fetch;
+  const originalNodeEnv = process.env.NODE_ENV;
+
   beforeEach(() => {
-    jest.clearAllMocks();
+    mockVerify.mockReset();
+    global.fetch = jest.fn();
+    process.env.NODE_ENV = originalNodeEnv;
+  });
+
+  afterAll(() => {
+    global.fetch = originalFetch;
+    process.env.NODE_ENV = originalNodeEnv;
   });
 
   it('returns 401 when no cookie or Authorization header', async () => {
@@ -78,6 +97,25 @@ describe('requireAuth middleware', () => {
     expect(next).toHaveBeenCalled();
   });
 
+  it('uses a valid access cookie without calling the durable-session endpoint', async () => {
+    mockVerify.mockResolvedValue({
+      sub: 'current-user',
+      email: 'current@example.com',
+      iss: 'aiden-gateway',
+    });
+
+    const { req, res, next } = buildReqResNext({
+      cookie: 'aiden-gw=current-access; aiden-gw-rt=durable-token',
+    });
+    await requireAuth(req, res, next);
+
+    expect(mockVerify).toHaveBeenCalledTimes(1);
+    expect(mockVerify).toHaveBeenCalledWith('current-access');
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect((res.cookie as jest.Mock)).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
   it('prefers cookie over Bearer header when both present', async () => {
     mockVerify.mockResolvedValue({
       sub: 'user-from-cookie',
@@ -105,6 +143,130 @@ describe('requireAuth middleware', () => {
     expect((res.json as jest.Mock)).toHaveBeenCalledWith({
       error: 'Invalid or expired token',
     });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('recovers an RT-only request and trusts the locally verified current identity', async () => {
+    process.env.NODE_ENV = 'production';
+    (global.fetch as jest.Mock).mockResolvedValue(gatewayResponse(200, {
+      jwt: 'fresh-access',
+      user: { id: 'untrusted-user', email: 'untrusted@example.com' },
+    }));
+    mockVerify.mockResolvedValue({
+      sub: 'current-user',
+      email: 'current@example.com',
+      iss: 'aiden-gateway',
+    });
+
+    const { req, res, next } = buildReqResNext({
+      cookie: 'tracking=do-not-forward; aiden-gw-rt=durable-token',
+    });
+    await requireAuth(req, res, next);
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://www.aiden.services/api/auth/access',
+      {
+        method: 'POST',
+        headers: { Cookie: 'aiden-gw-rt=durable-token' },
+        cache: 'no-store',
+      },
+    );
+    expect(mockVerify).toHaveBeenCalledTimes(1);
+    expect(mockVerify).toHaveBeenCalledWith('fresh-access');
+    expect((req as any).user).toEqual({
+      id: 'current-user',
+      email: 'current@example.com',
+      aud: 'authenticated',
+    });
+    expect((res.cookie as jest.Mock)).toHaveBeenCalledTimes(1);
+    expect((res.cookie as jest.Mock)).toHaveBeenCalledWith('aiden-gw', 'fresh-access', {
+      httpOnly: true,
+      secure: true,
+      domain: '.aiden.services',
+      path: '/',
+      sameSite: 'lax',
+      maxAge: 30 * 60 * 1000,
+    });
+    expect((res.cookie as jest.Mock).mock.calls.flat()).not.toContain('aiden-gw-rt');
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers after an invalid access cookie using the durable cookie', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue(gatewayResponse(200, {
+      jwt: 'fresh-access',
+      user: { id: 'current-user', email: 'current@example.com' },
+    }));
+    mockVerify
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        sub: 'current-user',
+        email: 'current@example.com',
+        iss: 'aiden-gateway',
+      });
+
+    const { req, res, next } = buildReqResNext({
+      cookie: 'aiden-gw=expired-access; aiden-gw-rt=durable-token',
+    });
+    await requireAuth(req, res, next);
+
+    expect(mockVerify).toHaveBeenNthCalledWith(1, 'expired-access');
+    expect(mockVerify).toHaveBeenNthCalledWith(2, 'fresh-access');
+    expect((res.cookie as jest.Mock)).toHaveBeenCalledWith(
+      'aiden-gw',
+      'fresh-access',
+      expect.any(Object),
+    );
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed when the durable token is rejected', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue(gatewayResponse(401, {
+      error: 'Unauthorized',
+    }));
+
+    const { req, res, next } = buildReqResNext({
+      cookie: 'aiden-gw-rt=invalid-durable-token',
+    });
+    await requireAuth(req, res, next);
+
+    expect((res.status as jest.Mock)).toHaveBeenCalledWith(401);
+    expect((res.cookie as jest.Mock)).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the Gateway returns an invalid minted JWT', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue(gatewayResponse(200, {
+      jwt: 'invalid-minted-access',
+      user: { id: 'untrusted-user', email: 'untrusted@example.com' },
+    }));
+    mockVerify.mockResolvedValue(null);
+
+    const { req, res, next } = buildReqResNext({
+      cookie: 'aiden-gw-rt=durable-token',
+    });
+    await requireAuth(req, res, next);
+
+    expect(mockVerify).toHaveBeenCalledWith('invalid-minted-access');
+    expect((res.status as jest.Mock)).toHaveBeenCalledWith(401);
+    expect((res.cookie as jest.Mock)).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Gateway error response', () => Promise.resolve(gatewayResponse(503, {
+      error: 'Auth unavailable',
+    }))],
+    ['network failure', () => Promise.reject(new Error('connection failed'))],
+  ])('fails closed during a %s', async (_label, fetchResult) => {
+    (global.fetch as jest.Mock).mockImplementation(fetchResult);
+
+    const { req, res, next } = buildReqResNext({
+      cookie: 'aiden-gw-rt=durable-token',
+    });
+    await requireAuth(req, res, next);
+
+    expect((res.status as jest.Mock)).toHaveBeenCalledWith(503);
+    expect((res.cookie as jest.Mock)).not.toHaveBeenCalled();
     expect(next).not.toHaveBeenCalled();
   });
 });
