@@ -94,8 +94,15 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
   return (
     <div className="p-4 bg-black-card border-2 border-border-subtle">
       <div
-        {...getRootProps()}
-        className={`border-2 border-dashed p-8 text-center cursor-pointer transition-colors ${isDragActive ? 'border-red-hot bg-black-deep' : 'border-border-subtle hover:border-red-hot'}`}
+        {...getRootProps({
+          // react-dropzone already wires tabIndex + Enter/Space keyboard
+          // activation, but defaults the root to role="presentation" with no
+          // accessible name, hiding it from assistive tech. Give it an
+          // actionable role and label so it is announced as a real control.
+          role: 'button',
+          'aria-label': 'Upload a video file. Activate to browse, or drag and drop a file here.',
+        })}
+        className={`border-2 border-dashed p-8 text-center cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-hot ${isDragActive ? 'border-red-hot bg-black-deep' : 'border-border-subtle hover:border-red-hot'}`}
       >
         <input {...getInputProps()} />
         {file ? (

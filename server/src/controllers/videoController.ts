@@ -17,6 +17,7 @@ import {
   reserveExportForJob,
 } from '../lib/quota';
 import { resolveBillingPath } from '../lib/billing-path';
+import { fileHasVideoSignature } from '../lib/videoSignature';
 
 const VALID_PLATFORMS = [
   'instagram-story',
@@ -206,6 +207,17 @@ export const uploadVideo = async (req: Request, res: Response) => {
       type: req.file.mimetype,
       path: req.file.path,
     });
+
+    // The multer fileFilter only trusts the client-supplied mimetype (derived
+    // from the file extension), so a non-video renamed to `.mp4` slips through.
+    // Sniff the actual bytes on disk before spending storage/DB writes on it.
+    if (!(await fileHasVideoSignature(req.file.path))) {
+      console.warn('Rejected non-video upload:', req.file.originalname);
+      safeUnlink(tempPath);
+      return res.status(415).json({
+        error: 'Invalid file: not a supported video. Please upload an MP4, MOV, or AVI file.',
+      });
+    }
 
     // Parse + validate platforms BEFORE uploading to storage to avoid wasting
     // bandwidth and leaving orphan objects behind on bad input.

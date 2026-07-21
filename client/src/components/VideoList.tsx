@@ -202,12 +202,16 @@ export function VideoList({ onVideoSelect, onDeleteVideo }: VideoListProps) {
             </div>
 
             <div className="p-4">
-              <h3
-                className="font-bold text-white uppercase tracking-wide text-sm leading-snug min-h-[2.5rem] overflow-hidden"
-                style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}
-                title={displayName}
-              >
-                {displayName}
+              <h3 className="min-h-[2.5rem]" title={displayName}>
+                <button
+                  type="button"
+                  onClick={() => onVideoSelect(video)}
+                  aria-label={`Edit ${displayName}`}
+                  className="w-full text-left font-bold text-white uppercase tracking-wide text-sm leading-snug overflow-hidden hover:text-orange-accent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-hot"
+                  style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}
+                >
+                  {displayName}
+                </button>
               </h3>
               <p className="text-sm text-white-dim mt-1">
                 {new Date(video.created_at).toLocaleDateString()}
