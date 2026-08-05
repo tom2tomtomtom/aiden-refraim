@@ -1,6 +1,10 @@
 import { Request, Response } from 'express';
 
-jest.mock('../../config/supabase', () => ({ supabase: { from: jest.fn() } }));
+const mockRpc = jest.fn();
+
+jest.mock('../../config/supabase', () => ({
+  supabase: { from: jest.fn(), rpc: (...args: unknown[]) => mockRpc(...args) },
+}));
 
 jest.mock('../../services/ffmpegService', () => ({
   FFmpegService: { getVideoMetadata: jest.fn() },
@@ -61,6 +65,7 @@ import { StorageService } from '../../services/storageService';
 import { DatabaseService } from '../../services/databaseService';
 import { getQuotaState } from '../../lib/quota';
 import { detectFileVideoContainer } from '../../lib/videoSignature';
+import { MAX_STORAGE_BYTES_PER_USER } from '../../lib/storageQuota';
 import { MAX_SOURCE_DURATION_SECONDS } from '../../config/mediaLimits';
 
 const probe = FFmpegService.getVideoMetadata as jest.Mock;
@@ -87,8 +92,35 @@ const processReq = (platforms: string[]): Request => ({
 describe('upload rejects sources whose render cost is unbounded', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockRpc.mockResolvedValue({ data: 0, error: null });
+    (detectFileVideoContainer as jest.Mock).mockResolvedValue('iso-bmff');
     (StorageService.getSignedUrl as jest.Mock).mockResolvedValue('https://signed.example/src.mp4');
     (StorageService.signVideoRecord as jest.Mock).mockImplementation((v: unknown) => Promise.resolve(v));
+  });
+
+  it('rejects an upload that would push the account past its storage quota', async () => {
+    mockRpc.mockResolvedValue({ data: MAX_STORAGE_BYTES_PER_USER, error: null });
+    probe.mockResolvedValue({ width: 1920, height: 1080, duration: 12.5, fps: 30 });
+    const res = mockRes();
+
+    await uploadVideo(uploadReq(), res);
+
+    expect(res.status).toHaveBeenCalledWith(413);
+    expect((res.json as jest.Mock).mock.calls[0][0]).toMatchObject({ limit: 'storage' });
+    expect(StorageService.uploadVideo).not.toHaveBeenCalled();
+    expect(DatabaseService.createVideo).not.toHaveBeenCalled();
+  });
+
+  it('records the size it accepted so the quota can be enforced next time', async () => {
+    probe.mockResolvedValue({ width: 1920, height: 1080, duration: 12.5, fps: 30 });
+    (StorageService.uploadVideo as jest.Mock).mockResolvedValue('videos/clip.mp4');
+    (DatabaseService.createVideo as jest.Mock).mockResolvedValue({ id: 'video-1' });
+
+    await uploadVideo(uploadReq(), mockRes());
+
+    expect(DatabaseService.createVideo).toHaveBeenCalledWith(
+      expect.objectContaining({ source_bytes: 1024 }),
+    );
   });
 
   it('rejects a source longer than the duration cap with 413 and never stores it', async () => {

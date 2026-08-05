@@ -34,6 +34,7 @@ import {
   MAX_OUTPUTS_PER_EXPORT,
   findSourceLimitViolation,
 } from '../config/mediaLimits';
+import { checkStorageQuota, storageQuotaMessage } from '../lib/storageQuota';
 import {
   SUPPORTED_EXTENSIONS,
   SUPPORTED_FORMATS_PHRASE,
@@ -180,6 +181,22 @@ export const uploadVideo = async (req: Request, res: Response) => {
       });
     }
 
+    const quota = await checkStorageQuota(user.id, req.file.size);
+    if (!quota.allowed) {
+      console.warn('Rejected upload over storage quota:', {
+        userId: user.id,
+        used: quota.usedBytes,
+        incoming: quota.incomingBytes,
+      });
+      safeUnlink(tempPath);
+      return res.status(413).json({
+        error: storageQuotaMessage(quota),
+        limit: 'storage',
+        measured: quota.usedBytes + quota.incomingBytes,
+        allowed: quota.limitBytes,
+      });
+    }
+
     // Parse + validate platforms BEFORE uploading to storage to avoid wasting
     // bandwidth and leaving orphan objects behind on bad input.
     let rawPlatforms: unknown = [];
@@ -214,6 +231,7 @@ export const uploadVideo = async (req: Request, res: Response) => {
       status: 'UPLOADED',
       user_id: user.id,
       platforms,
+      source_bytes: req.file.size,
       ...(req.body.title && { title: req.body.title }),
       ...(req.body.description && { description: req.body.description }),
     });
