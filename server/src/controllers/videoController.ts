@@ -18,6 +18,11 @@ import {
 } from '../lib/quota';
 import { resolveBillingPath } from '../lib/billing-path';
 import { fileHasVideoSignature } from '../lib/videoSignature';
+import { FFmpegService } from '../services/ffmpegService';
+import {
+  MAX_OUTPUTS_PER_EXPORT,
+  findSourceLimitViolation,
+} from '../config/mediaLimits';
 
 const VALID_PLATFORMS = [
   'instagram-story',
@@ -174,6 +179,20 @@ function sanitizePlatforms(input: unknown): string[] {
   return out;
 }
 
+/**
+ * The multer cap bounds bytes, which says nothing about the work an export
+ * costs: duration and frame size are what ffmpeg re-encodes, once per
+ * requested platform. Measure both before committing to any of it.
+ */
+async function measureSource(inputPath: string) {
+  const metadata = await FFmpegService.getVideoMetadata(inputPath);
+  return {
+    durationSeconds: metadata.duration,
+    width: metadata.width,
+    height: metadata.height,
+  };
+}
+
 function safeUnlink(filePath: string | undefined): void {
   if (!filePath) return;
   fs.promises.unlink(filePath).catch((err) => {
@@ -216,6 +235,36 @@ export const uploadVideo = async (req: Request, res: Response) => {
       safeUnlink(tempPath);
       return res.status(415).json({
         error: 'Invalid file: not a supported video. Please upload an MP4, MOV, or AVI file.',
+      });
+    }
+
+    // The file is already on local disk, so measuring it here is free and the
+    // user learns straight away rather than after paying for an export.
+    let sourceMeasurements;
+    try {
+      sourceMeasurements = await measureSource(req.file.path);
+    } catch (error) {
+      console.warn('Rejected unreadable upload:', req.file.originalname, error);
+      safeUnlink(tempPath);
+      return res.status(415).json({
+        error: 'We could not read this video. Please re-export it and try again.',
+      });
+    }
+
+    const limitViolation = findSourceLimitViolation(sourceMeasurements);
+    if (limitViolation) {
+      console.warn('Rejected oversized upload:', {
+        name: req.file.originalname,
+        limit: limitViolation.limit,
+        measured: limitViolation.measured,
+        allowed: limitViolation.allowed,
+      });
+      safeUnlink(tempPath);
+      return res.status(413).json({
+        error: limitViolation.message,
+        limit: limitViolation.limit,
+        measured: limitViolation.measured,
+        allowed: limitViolation.allowed,
       });
     }
 
@@ -263,7 +312,10 @@ export const uploadVideo = async (req: Request, res: Response) => {
       platforms: video.platforms,
     });
 
-    res.status(201).json(await StorageService.signVideoRecord(video));
+    res.status(201).json({
+      ...(await StorageService.signVideoRecord(video)),
+      source: sourceMeasurements,
+    });
   } catch (error) {
     safeUnlink(tempPath);
     console.error('Error in uploadVideo:', {
@@ -651,6 +703,15 @@ export const processVideo = async (req: Request, res: Response) => {
       });
     }
 
+    // Each platform is a separate sequential re-encode of the whole source.
+    if (platforms.length > MAX_OUTPUTS_PER_EXPORT) {
+      return res.status(400).json({
+        error: `You can export to at most ${MAX_OUTPUTS_PER_EXPORT} platforms at once.`,
+        requested: platforms.length,
+        allowed: MAX_OUTPUTS_PER_EXPORT,
+      });
+    }
+
     const video = await DatabaseService.getVideo(id);
 
     if (!video) {
@@ -659,6 +720,31 @@ export const processVideo = async (req: Request, res: Response) => {
 
     if (video.user_id !== user.id) {
       return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // Measure the source before resolving a billing path, so an export that is
+    // too expensive to run is rejected before it costs the caller anything.
+    // A probe failure falls through: the pipeline re-checks the same caps
+    // against a local copy, so nothing unbounded gets past both.
+    let sourceMeasurements;
+    try {
+      const sourceUrl =
+        (await StorageService.getSignedUrl(video.original_url)) ?? video.original_url;
+      sourceMeasurements = await measureSource(sourceUrl);
+    } catch (error) {
+      console.warn(`Could not measure ${id} before export; deferring to pipeline:`, error);
+    }
+
+    if (sourceMeasurements) {
+      const limitViolation = findSourceLimitViolation(sourceMeasurements);
+      if (limitViolation) {
+        return res.status(413).json({
+          error: limitViolation.message,
+          limit: limitViolation.limit,
+          measured: limitViolation.measured,
+          allowed: limitViolation.allowed,
+        });
+      }
     }
 
     // Resolve exactly ONE billing path for this export (UXA F-010):

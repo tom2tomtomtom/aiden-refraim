@@ -6,6 +6,7 @@ import { StorageService } from './storageService';
 import { OUTPUT_FORMATS, OutputFormat } from '../config/outputFormats';
 import { FFmpegService, FocusPoint } from './ffmpegService';
 import { defaultConfig, VideoProcessingConfig } from '../config/videoProcessing';
+import { findSourceLimitViolation } from '../config/mediaLimits';
 
 interface Video {
   id: string;
@@ -91,6 +92,30 @@ export interface VideoAnalysis {
 }
 
 class ProcessingOwnershipLostError extends Error {}
+export class SourceTooLargeError extends Error {}
+
+/**
+ * The route rejects an oversized source before billing, but a video uploaded
+ * before the caps existed, or one the route could not probe, reaches here.
+ * This runs against the measured source and before the first re-encode, so
+ * the per-platform loop can never multiply unbounded work.
+ */
+const assertSourceWithinLimits = (analysis: VideoAnalysis): void => {
+  const measured = analysis.metadata;
+  // A partial measurement can't be judged either way. Both gates in front of
+  // this probe a complete one, so only an analyzer that reported less than it
+  // normally does lands here.
+  if (!measured?.resolution) return;
+
+  const violation = findSourceLimitViolation({
+    durationSeconds: measured.duration,
+    width: measured.resolution.width,
+    height: measured.resolution.height,
+  });
+  if (violation) {
+    throw new SourceTooLargeError(violation.message);
+  }
+};
 
 class BasicVideoProcessor implements VideoProcessor {
   private config: VideoProcessingConfig;
@@ -179,6 +204,7 @@ class BasicVideoProcessor implements VideoProcessor {
 
       // Analyze video to detect subjects and important regions
       const analysisResult = await this.analyzer.analyze(sourceUrl);
+      assertSourceWithinLimits(analysisResult);
       await this.updateVideoStatus(
         video.id, processingStatus, undefined, 20, context.jobId, [processingStatus],
       );

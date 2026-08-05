@@ -46,7 +46,11 @@ const QUALITY_PRESETS: Record<QualityPreset, { preset: string; crf: string }> = 
 };
 
 export class FFmpegService {
-  private static async getVideoMetadata(inputPath: string): Promise<{
+  /**
+   * Public because it is the enforcement point for the input caps: callers
+   * measure a source here before committing to any re-encode.
+   */
+  static async getVideoMetadata(inputPath: string): Promise<{
     width: number;
     height: number;
     duration: number;
@@ -59,7 +63,7 @@ export class FFmpegService {
         '-select_streams',
         'v:0',
         '-show_entries',
-        'stream=width,height,duration,r_frame_rate',
+        'stream=width,height,duration,r_frame_rate:format=duration',
         '-of',
         'json',
         inputPath,
@@ -82,10 +86,16 @@ export class FFmpegService {
           const metadata = JSON.parse(output);
           const stream = metadata.streams[0];
           const [num, den] = stream.r_frame_rate.split('/');
+          // Some containers carry duration only at the format level, so fall
+          // back rather than reporting a source as unmeasurable.
+          const streamDuration = parseFloat(stream.duration);
+          const duration = Number.isFinite(streamDuration)
+            ? streamDuration
+            : parseFloat(metadata.format?.duration);
           resolve({
             width: stream.width,
             height: stream.height,
-            duration: parseFloat(stream.duration),
+            duration,
             fps: Math.round(parseInt(num) / parseInt(den))
           });
         } catch (error) {
