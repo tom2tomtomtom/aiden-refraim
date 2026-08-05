@@ -903,8 +903,8 @@ export default function FocusSelector() {
 
         const centerX = (focusX / 100) * vw;
         const centerY = (focusY / 100) * vh;
-        let srcX = Math.max(0, Math.min(vw - srcW, centerX - srcW / 2));
-        let srcY = Math.max(0, Math.min(vh - srcH, centerY - srcH / 2));
+        const srcX = Math.max(0, Math.min(vw - srcW, centerX - srcW / 2));
+        const srcY = Math.max(0, Math.min(vh - srcH, centerY - srcH / 2));
 
         cropCtx.clearRect(0, 0, cropWidth, cropHeight);
         cropCtx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, cropWidth, cropHeight);

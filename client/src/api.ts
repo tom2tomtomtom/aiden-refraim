@@ -59,6 +59,17 @@ export interface Video {
   processing_jobs?: ProcessingJob[];
 }
 
+/** Shape the server uses for a non-2xx body. `error` is shown to the user verbatim. */
+interface ApiErrorBody {
+  error?: string;
+  details?: string;
+}
+
+export interface ApiError extends Error {
+  status: number;
+  details: unknown;
+}
+
 export class ApiClient {
   // Auth travels via the HttpOnly `aiden-gw` cookie on every request.
   // The cookie is set by Gateway at login and scoped to .aiden.services,
@@ -69,71 +80,68 @@ export class ApiClient {
     endpoint: string,
     options: RequestInit = {}
   ): Promise<T> {
+    const isFormData = options.body instanceof FormData;
+    const headers: Record<string, string> = {
+      ...options.headers as Record<string, string>,
+    };
+
+    if (!isFormData) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    const url = `${API_BASE_URL}${endpoint}`;
+
+    let response: Response;
     try {
-      const isFormData = options.body instanceof FormData;
-      const headers: Record<string, string> = {
-        ...options.headers as Record<string, string>,
-      };
-
-      if (!isFormData) {
-        headers['Content-Type'] = 'application/json';
+      response = await fetch(url, {
+        ...options,
+        credentials: 'include',
+        headers,
+      });
+    } catch (fetchError) {
+      // Handle network errors
+      if (fetchError instanceof TypeError && fetchError.message === 'Failed to fetch') {
+        throw new Error(`Cannot connect to server at ${url}. Please ensure the server is running and try again.`);
       }
+      throw fetchError;
+    }
 
-      const url = `${API_BASE_URL}${endpoint}`;
-
-      let response: Response;
+    let responseData: unknown;
+    const contentType = response.headers.get('content-type');
+    if (contentType?.includes('application/json')) {
       try {
-        response = await fetch(url, {
-          ...options,
-          credentials: 'include',
-          headers,
-        });
-      } catch (fetchError) {
-        // Handle network errors
-        if (fetchError instanceof TypeError && fetchError.message === 'Failed to fetch') {
-          throw new Error(`Cannot connect to server at ${url}. Please ensure the server is running and try again.`);
-        }
-        throw fetchError;
+        responseData = await response.json();
+      } catch {
+        throw new Error('Server returned invalid JSON response');
       }
+    } else {
+      const text = await response.text();
+      try {
+        responseData = JSON.parse(text);
+      } catch {
+        responseData = { error: text };
+      }
+    }
 
-      let responseData: any;
-      const contentType = response.headers.get('content-type');
-      if (contentType?.includes('application/json')) {
-        try {
-          responseData = await response.json();
-        } catch {
-          throw new Error('Server returned invalid JSON response');
+    if (!response.ok) {
+      const body = responseData as ApiErrorBody | null;
+      let errorMessage = 'Request failed';
+      if (body?.error) {
+        errorMessage += `: ${body.error}`;
+        if (body.details) {
+          errorMessage += ` (${body.details})`;
         }
       } else {
-        const text = await response.text();
-        try {
-          responseData = JSON.parse(text);
-        } catch {
-          responseData = { error: text };
-        }
+        errorMessage += `: ${response.statusText}`;
       }
 
-      if (!response.ok) {
-        let errorMessage = 'Request failed';
-        if (responseData?.error) {
-          errorMessage += `: ${responseData.error}`;
-          if (responseData.details) {
-            errorMessage += ` (${responseData.details})`;
-          }
-        } else {
-          errorMessage += `: ${response.statusText}`;
-        }
-
-        const error = new Error(errorMessage);
-        (error as any).status = response.status;
-        (error as any).details = responseData;
-        throw error;
-      }
-
-      return responseData;
-    } catch (error) {
+      const error = new Error(errorMessage) as ApiError;
+      error.status = response.status;
+      error.details = responseData;
       throw error;
     }
+
+    return responseData as T;
   }
 
   async uploadVideo(

@@ -20,6 +20,18 @@ export interface Subject {
   }[];
 }
 
+/** A focus-point suggestion in source-pixel space, averaged over a subject's track. */
+export interface SubjectFocusPoint {
+  id: string;
+  timeStart: number;
+  timeEnd: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  description: string;
+}
+
 export interface ScanOptions {
   interval?: number; // Sampling interval in seconds (default: 1)
   minScore?: number; // Minimum confidence score to include (0-1, default: 0.5)
@@ -394,9 +406,12 @@ class VideoScannerService {
   }
   
   /**
-   * Convert detected subjects to focus points
+   * Convert detected subjects to focus points.
+   *
+   * These are the scanner's own bbox-space suggestions, not the persisted
+   * `FocusPoint` rows: coordinates are pixels here and percentages there.
    */
-  public subjectsToFocusPoints(subjects: Subject[]): any[] {
+  public subjectsToFocusPoints(subjects: Subject[]): SubjectFocusPoint[] {
     return subjects.map(subject => {
       // Calculate average position
       const positions = subject.positions;

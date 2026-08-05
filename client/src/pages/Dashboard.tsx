@@ -7,6 +7,7 @@ import { Toast } from '../components/Toast';
 import { useApi } from '../contexts/ApiContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { Video } from '../api';
+import { errorDetail } from '../lib/errorDetail';
 
 export function Dashboard() {
   const { user } = useAuth();
@@ -64,7 +65,7 @@ export function Dashboard() {
     } catch (error) {
       showToast(
         'Processing failed',
-        'Failed to start video processing',
+        errorDetail(error, 'Failed to start video processing'),
         'error'
       );
     }
@@ -76,7 +77,7 @@ export function Dashboard() {
       await api.deleteVideo(video.id);
       showToast('Video deleted', undefined, 'success');
     } catch (error) {
-      showToast('Delete failed', 'Failed to delete video', 'error');
+      showToast('Delete failed', errorDetail(error, 'Failed to delete video'), 'error');
     }
   };
 
