@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { unlinkSync, existsSync } from 'fs';
+import { randomUUID } from 'node:crypto';
 import path from 'path';
 import { StorageService } from './storageService';
 import { guardMediaProcess } from '../lib/mediaProcess';
@@ -19,6 +20,18 @@ interface ProcessingFormat {
       height: number;
     };
   };
+}
+
+/**
+ * Best-effort delete. Cleanup runs in `finally` blocks that must not mask the
+ * error that got them there, and the file is often already gone.
+ */
+function removeIfPresent(filePath: string): void {
+  try {
+    if (existsSync(filePath)) unlinkSync(filePath);
+  } catch (err) {
+    console.warn(`Failed to remove temporary file ${filePath}:`, err);
+  }
 }
 
 export interface CropSegment {
@@ -151,8 +164,33 @@ export class FFmpegService {
     focusRegion: { x: number; y: number; width: number; height: number },
     platform: string
   ): Promise<string> {
-    // Download video to temp location
-    const tempInputPath = path.join('/tmp', `input-${Date.now()}.mp4`);
+    // Download video to temp location. The name is random rather than
+    // timestamped: two exports starting in the same millisecond would
+    // otherwise share a path, and the first to finish would delete the file
+    // the second was still reading.
+    const tempInputPath = path.join('/tmp', `input-${randomUUID()}.mp4`);
+    try {
+      return await this.renderFromSource(
+        inputUrl, tempInputPath, outputPath, format, focusRegion, platform,
+      );
+    } finally {
+      // The source copy outlives nothing. It used to survive every render,
+      // success or failure, at full source size and once per platform.
+      removeIfPresent(tempInputPath);
+      // uploadProcessedVideo deletes the render on the success path only, so
+      // a failed ffmpeg run or a failed upload used to leave it behind too.
+      removeIfPresent(outputPath);
+    }
+  }
+
+  private static async renderFromSource(
+    inputUrl: string,
+    tempInputPath: string,
+    outputPath: string,
+    format: ProcessingFormat,
+    focusRegion: { x: number; y: number; width: number; height: number },
+    platform: string
+  ): Promise<string> {
     await StorageService.downloadVideo(inputUrl, tempInputPath);
 
     // Get video metadata
@@ -380,10 +418,24 @@ export class FFmpegService {
     let localInput = inputPath;
     const isUrl = inputPath.startsWith('http://') || inputPath.startsWith('https://');
     if (isUrl) {
-      localInput = path.join('/tmp', `input-seg-${Date.now()}.mp4`);
+      localInput = path.join('/tmp', `input-seg-${randomUUID()}.mp4`);
       await StorageService.downloadVideo(inputPath, localInput);
     }
 
+    try {
+      return await this.renderSegments(localInput, outputPath, format, focusPoints, options);
+    } finally {
+      if (isUrl) removeIfPresent(localInput);
+    }
+  }
+
+  private static async renderSegments(
+    localInput: string,
+    outputPath: string,
+    format: { width: number; height: number; aspectRatio: string },
+    focusPoints: FocusPoint[],
+    options: { letterbox: boolean; quality: QualityPreset }
+  ): Promise<string> {
     const metadata = await this.getVideoMetadata(localInput);
     const segments = this.buildSegments(focusPoints, metadata.duration);
     const quality = QUALITY_PRESETS[options.quality];
@@ -415,20 +467,18 @@ export class FFmpegService {
 
       await this.runFfmpeg(args, segmentTimeoutMs);
 
-      // Clean up temp input
-      if (isUrl && existsSync(localInput)) unlinkSync(localInput);
-
       return outputPath;
     }
 
     // Multiple segments: process each, then concat
     const segmentFiles: string[] = [];
-    const concatListPath = path.join('/tmp', `concat-${Date.now()}.txt`);
+    const runId = randomUUID();
+    const concatListPath = path.join('/tmp', `concat-${runId}.txt`);
 
     try {
       for (let i = 0; i < segments.length; i++) {
         const seg = segments[i];
-        const segPath = path.join('/tmp', `seg-${Date.now()}-${i}.mp4`);
+        const segPath = path.join('/tmp', `seg-${runId}-${i}.mp4`);
         segmentFiles.push(segPath);
 
         const filter = this.buildCropFilter(
@@ -476,12 +526,8 @@ export class FFmpegService {
 
       return outputPath;
     } finally {
-      // Clean up temp files
-      for (const f of segmentFiles) {
-        if (existsSync(f)) unlinkSync(f);
-      }
-      if (existsSync(concatListPath)) unlinkSync(concatListPath);
-      if (isUrl && existsSync(localInput)) unlinkSync(localInput);
+      for (const f of segmentFiles) removeIfPresent(f);
+      removeIfPresent(concatListPath);
     }
   }
 }
