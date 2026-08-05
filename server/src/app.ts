@@ -4,7 +4,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import path from 'path';
 import { json, urlencoded } from 'body-parser';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import testRoutes from './routes/test';
 import videoRoutes from './routes/videoRoutes';
 import adminRoutes from './routes/admin';
@@ -15,24 +15,57 @@ import webhookRoutes from './routes/webhookRoutes';
 import aiEditorRoutes from './routes/aiEditorRoutes';
 import meRoutes from './routes/meRoutes';
 
+// Railway terminates TLS at its edge and forwards to the container, so every
+// request arrives from the proxy. With `trust proxy` unset, req.ip is that one
+// proxy address and all users of the app share a single 100-request bucket:
+// any one client could lock everybody out.
+//
+// The hop count is exact, not `true`. Trusting the whole chain would let a
+// client supply its own X-Forwarded-For and mint a fresh bucket per request,
+// which removes the limiter rather than fixing it.
+const TRUSTED_PROXY_HOPS = Number(process.env.TRUSTED_PROXY_HOPS ?? 1);
+
+if (!Number.isInteger(TRUSTED_PROXY_HOPS) || TRUSTED_PROXY_HOPS < 0) {
+  throw new Error(
+    `TRUSTED_PROXY_HOPS must be a non-negative integer, got ${process.env.TRUSTED_PROXY_HOPS}`,
+  );
+}
+
 const app = express();
+
+app.set('trust proxy', TRUSTED_PROXY_HOPS);
 
 // RFM-SEC-XPB: Express auto-sets `X-Powered-By: Express` on every response,
 // disclosing the framework. Disable it before any middleware can leak the
 // default header.
 app.disable('x-powered-by');
 
+/**
+ * Bucket by client address, collapsing IPv6 to a /56 so one allocation can't
+ * spread across a practically unlimited number of addresses.
+ *
+ * Both limiters use the default in-memory store, which is per-process. That is
+ * exact at the current single Railway replica, and briefly doubles the
+ * allowance during a rolling deploy. Setting numReplicas above 1 multiplies
+ * every limit here by the replica count and requires a shared store first.
+ */
+const clientKey = (req: express.Request): string => ipKeyGenerator(req.ip ?? '', 56);
+
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP
+  max: 100,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: clientKey,
   message: { error: 'Too many requests, please try again later' },
 });
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20, // stricter for auth
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: clientKey,
   message: { error: 'Too many auth attempts' },
 });
 
