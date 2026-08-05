@@ -27,6 +27,11 @@ describe('Gateway cost linkage', () => {
 
     const [url, options] = (global.fetch as jest.Mock).mock.calls[0];
     expect(url).toBe('https://test.aiden.services/api/tokens/deduct');
+    expect(options.headers).toMatchObject({
+      'X-Service-Key': 'test-key',
+      'X-Service-Id': 'refraim',
+      'X-User-Id': 'user-1',
+    });
     expect(JSON.parse(options.body)).toEqual({
       product: 'refraim',
       operation: 'video_export',

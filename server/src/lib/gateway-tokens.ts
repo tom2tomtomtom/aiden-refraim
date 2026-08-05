@@ -12,7 +12,7 @@
  */
 
 const GATEWAY_URL = process.env.GATEWAY_URL || 'https://www.aiden.services'
-const SERVICE_KEY = process.env.AIDEN_SERVICE_KEY
+const SERVICE_KEY = process.env.AIDEN_GATEWAY_SERVICE_KEY || process.env.AIDEN_SERVICE_KEY
 
 interface CheckResult {
   allowed: boolean
@@ -48,6 +48,7 @@ function getHeaders(userId: string): Record<string, string> {
   return {
     'Content-Type': 'application/json',
     'X-Service-Key': SERVICE_KEY,
+    'X-Service-Id': 'refraim',
     'X-User-Id': userId,
   }
 }
