@@ -5,6 +5,42 @@ import express from 'express';
 
 const router = Router();
 
+const UNIQUE_VIOLATION = '23505';
+
+type StripeEventClaim = 'claimed' | 'duplicate' | 'unavailable';
+
+/**
+ * Record that this event id is being handled. The primary key does the work:
+ * a second delivery of the same event loses the insert race and is told so,
+ * whether it arrives a second or a week later.
+ */
+async function claimStripeEvent(eventId: string, eventType: string): Promise<StripeEventClaim> {
+  try {
+    const { error } = await supabase
+      .from('stripe_webhook_events')
+      .insert({ event_id: eventId, event_type: eventType });
+
+    if (!error) return 'claimed';
+    if (error.code === UNIQUE_VIOLATION) return 'duplicate';
+
+    console.error('Failed to claim Stripe event:', error);
+    return 'unavailable';
+  } catch (err) {
+    console.error('Failed to claim Stripe event:', err);
+    return 'unavailable';
+  }
+}
+
+async function releaseStripeEvent(eventId: string): Promise<void> {
+  try {
+    await supabase.from('stripe_webhook_events').delete().eq('event_id', eventId);
+  } catch (err) {
+    // The event stays claimed and Stripe's retry will be treated as a
+    // duplicate. Loud, because it needs a manual replay to resolve.
+    console.error(`Failed to release Stripe event ${eventId}; it will not be retried:`, err);
+  }
+}
+
 // Stripe webhook (needs raw body, not parsed JSON)
 router.post(
   '/stripe',
@@ -29,6 +65,22 @@ router.post(
     } catch (err) {
       console.error('Webhook signature verification failed:', err);
       res.status(400).json({ error: 'Invalid signature' });
+      return;
+    }
+
+    // Claim the event id before doing anything with it. Stripe delivers at
+    // least once, and checkout.session.completed zeroes the export counter, so
+    // an unguarded redelivery is a free month.
+    const claim = await claimStripeEvent(event.id, event.type);
+    if (claim === 'duplicate') {
+      res.json({ received: true, duplicate: true });
+      return;
+    }
+    if (claim === 'unavailable') {
+      // Without the ledger there is no replay protection, and a 500 makes
+      // Stripe retry once the ledger is reachable again.
+      console.error('Webhook idempotency ledger unavailable; refusing the event');
+      res.status(500).json({ error: 'Webhook handler failed' });
       return;
     }
 
@@ -100,6 +152,10 @@ router.post(
       return;
     } catch (error) {
       console.error('Webhook handler error:', error);
+      // The claim is a claim, not a receipt. Releasing it keeps Stripe's retry
+      // able to apply the event; leaving it would make one transient failure
+      // permanent.
+      await releaseStripeEvent(event.id);
       res.status(500).json({ error: 'Webhook handler failed' });
       return;
     }

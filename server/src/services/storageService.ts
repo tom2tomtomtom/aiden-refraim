@@ -4,14 +4,37 @@ import path from 'path';
 import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import axios from 'axios';
+import { SUPPORTED_EXTENSIONS, SUPPORTED_MIME_TYPES } from '../config/uploadFormats';
 
 const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'videos';
+
+const positiveNumberFromEnv = (name: string, fallback: number): number => {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
 
 // UXA-20260717 F-012: exports can carry pre-release/NDA client creative, so
 // the bucket is PRIVATE and every read goes through a short-lived signed URL.
 // Stored rows keep the public-form URL as a stable path identifier only —
 // fetching it raw returns 401/403 by design.
-const SIGNED_URL_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
+//
+// The default is what reaches a browser: playback sources, per-platform status
+// URLs, download links. Those leak the way URLs leak — history, referrers,
+// screenshots, a pasted link in a chat — and a week of anonymous access to
+// unreleased client creative is the whole exposure this bucket was made
+// private to avoid. The client refetches on every status poll and on
+// navigation, so it never needs a long-lived one.
+const SIGNED_URL_TTL_SECONDS = positiveNumberFromEnv('REFRAIM_SIGNED_URL_TTL_SECONDS', 60 * 60);
+
+// Pipeline reads are different: one signature is minted server-side at the
+// start of a run and must outlive the whole run. An export can render up to
+// MAX_OUTPUTS_PER_EXPORT platforms at up to MAX_RENDER_TIMEOUT_MS each, so the
+// worst legitimate case is around eight hours. This URL is never sent to a
+// browser and never stored.
+export const PIPELINE_SIGNED_URL_TTL_SECONDS = positiveNumberFromEnv(
+  'REFRAIM_PIPELINE_SIGNED_URL_TTL_SECONDS',
+  12 * 60 * 60,
+);
 
 export class StorageService {
   static async ensureBucketExists(): Promise<void> {
@@ -25,7 +48,7 @@ export class StorageService {
         console.log(`Creating storage bucket: ${STORAGE_BUCKET}`);
         const { error: createError } = await supabase.storage.createBucket(STORAGE_BUCKET, {
           public: false,
-          allowedMimeTypes: ['video/mp4', 'video/quicktime', 'video/x-msvideo']
+          allowedMimeTypes: [...SUPPORTED_MIME_TYPES],
         });
         if (createError) throw createError;
       }
@@ -33,7 +56,7 @@ export class StorageService {
       // Enforce private access; reads use signed URLs (F-012).
       const { error: updateError } = await supabase.storage.updateBucket(STORAGE_BUCKET, {
         public: false,
-        allowedMimeTypes: ['video/mp4', 'video/quicktime', 'video/x-msvideo']
+        allowedMimeTypes: [...SUPPORTED_MIME_TYPES],
       });
       if (updateError) throw updateError;
 
@@ -125,9 +148,10 @@ export class StorageService {
       }
 
       const fileExt = path.extname(fileName).toLowerCase();
-      const allowedExtensions = ['.mp4', '.mov', '.avi'];
-      if (!allowedExtensions.includes(fileExt)) {
-        throw new Error(`Invalid file extension: ${fileExt}. Allowed: ${allowedExtensions.join(', ')}`);
+      if (!SUPPORTED_EXTENSIONS.includes(fileExt)) {
+        throw new Error(
+          `Invalid file extension: ${fileExt}. Allowed: ${SUPPORTED_EXTENSIONS.join(', ')}`,
+        );
       }
 
       // 2. Ensure bucket exists

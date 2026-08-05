@@ -8,6 +8,7 @@ import FocusSelector from '../components/editor/FocusSelector';
 import FocusPointOverlay from '../components/editor/FocusPointOverlay';
 import FocusPointEditor from '../components/editor/FocusPointEditor';
 import AspectRatioPreview from '../components/video/AspectRatioPreview';
+import { FormError } from '../components/ui/form-error';
 
 export default function Editor() {
   const { videoId: paramVideoId } = useParams<{ videoId: string }>();
@@ -39,7 +40,7 @@ export default function Editor() {
       <div className="max-w-7xl mx-auto px-4 py-12 text-center">
         <div className="bg-black-card border-2 border-red-hot p-8">
           <p className="text-red-hot text-sm font-bold uppercase mb-4">Error Loading Video</p>
-          <p className="text-white-muted text-sm mb-4">{error}</p>
+          <FormError message={error} className="text-white-muted text-sm mb-4" />
           <Link to="/" className="text-orange-accent text-xs font-bold uppercase tracking-wide hover:text-red-hot transition-colors">
             Back to Dashboard
           </Link>

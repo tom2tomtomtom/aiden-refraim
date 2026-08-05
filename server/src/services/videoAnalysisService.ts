@@ -1,6 +1,8 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import { StorageService } from './storageService';
+import { guardMediaProcess } from '../lib/mediaProcess';
+import { PROBE_TIMEOUT_MS, renderTimeoutMs } from '../config/mediaLimits';
 
 interface SceneData {
   timestamp: number;
@@ -53,14 +55,19 @@ export const analyzeVideo = async (videoUrl: string): Promise<AnalysisResult> =>
     let scenes: SceneData[] = [];
     let motionData: MotionData[] = [];
 
+    // Both passes decode the whole source, so they get the same duration-derived
+    // ceiling as a render. Without one their graceful fallbacks are unreachable:
+    // a wedged pass never settles, so the catch below never runs.
+    const analysisTimeoutMs = renderTimeoutMs(metadata.duration);
+
     try {
-      scenes = await detectScenes(tempPath);
+      scenes = await detectScenes(tempPath, analysisTimeoutMs);
     } catch (err) {
       console.warn('Scene detection failed, using empty scenes:', err);
     }
 
     try {
-      motionData = await analyzeMotion(tempPath);
+      motionData = await analyzeMotion(tempPath, analysisTimeoutMs);
     } catch (err) {
       console.warn('Motion analysis failed, using center focus:', err);
     }
@@ -84,7 +91,7 @@ export const analyzeVideo = async (videoUrl: string): Promise<AnalysisResult> =>
   }
 };
 
-const detectScenes = async (videoPath: string): Promise<SceneData[]> => {
+const detectScenes = async (videoPath: string, timeoutMs: number): Promise<SceneData[]> => {
   return new Promise((resolve, reject) => {
     try {
       const ffmpeg = spawn('ffmpeg', [
@@ -96,6 +103,8 @@ const detectScenes = async (videoPath: string): Promise<SceneData[]> => {
         'null',
         '-',
       ]);
+
+      guardMediaProcess(ffmpeg, { label: 'ffmpeg scene detection', timeoutMs }, reject);
 
       const scenes: SceneData[] = [];
       let currentTime = 0;
@@ -115,11 +124,6 @@ const detectScenes = async (videoPath: string): Promise<SceneData[]> => {
         }
       });
 
-      ffmpeg.on('error', (err) => {
-        console.error('FFmpeg process error:', err);
-        reject(new Error(`FFmpeg process error: ${err.message}`));
-      });
-
       ffmpeg.on('close', (code) => {
         if (code !== 0) {
           console.error(`FFmpeg process exited with code ${code}`);
@@ -136,7 +140,7 @@ const detectScenes = async (videoPath: string): Promise<SceneData[]> => {
 };
 
 
-const analyzeMotion = async (videoPath: string): Promise<MotionData[]> => {
+const analyzeMotion = async (videoPath: string, timeoutMs: number): Promise<MotionData[]> => {
   return new Promise((resolve, reject) => {
     const ffmpeg = spawn('ffmpeg', [
       '-i',
@@ -147,6 +151,8 @@ const analyzeMotion = async (videoPath: string): Promise<MotionData[]> => {
       'null',
       '-',
     ]);
+
+    guardMediaProcess(ffmpeg, { label: 'ffmpeg motion analysis', timeoutMs }, reject);
 
     const motionData: MotionData[] = [];
     let currentTime = 0;
@@ -198,6 +204,8 @@ const getVideoMetadata = async (videoPath: string): Promise<{
       'json',
       videoPath,
     ]);
+
+    guardMediaProcess(ffprobe, { label: 'ffprobe', timeoutMs: PROBE_TIMEOUT_MS }, reject);
 
     let output = '';
     ffprobe.stdout.on('data', (data) => {

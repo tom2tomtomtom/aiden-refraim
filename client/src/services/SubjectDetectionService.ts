@@ -18,8 +18,19 @@ export interface DetectionResult {
   error?: string;
 }
 
+/** The part of a coco-ssd prediction this service reads. */
+interface CocoPrediction {
+  bbox: number[];
+  class: string;
+  score: number;
+}
+
+interface CocoSsdModel {
+  detect(input: HTMLImageElement | HTMLCanvasElement): Promise<CocoPrediction[]>;
+}
+
 class SubjectDetectionService {
-  private model: any = null;
+  private model: CocoSsdModel | null = null;
   private loading: boolean = false;
   private modelLoaded: boolean = false;
 
@@ -110,7 +121,7 @@ class SubjectDetectionService {
     if (!this.modelLoaded) {
       try {
         await this.loadModel();
-      } catch (error) {
+      } catch {
         return {
           objects: [],
           imageWidth: image.width,
@@ -141,7 +152,7 @@ class SubjectDetectionService {
       console.log('Detection complete, found', predictions.length, 'objects');
       
       // Convert to our DetectedObject format
-      objects = predictions.map((pred: any, i: number) => {
+      objects = predictions.map((pred: CocoPrediction, i: number) => {
         // bbox is in format [x, y, width, height]
         return {
           id: `detection-${i}`,

@@ -4,6 +4,7 @@ import { useVideo } from '../contexts/VideoContext';
 import { useFocusPoints } from '../contexts/FocusPointsContext';
 import VideoExporter from '../components/video/VideoExporter';
 import { Play, Pause, Eye } from 'lucide-react';
+import { FormError } from '../components/ui/form-error';
 
 const UNIQUE_RATIOS = [
   { label: '9:16', w: 9, h: 16, desc: 'TikTok / Stories / Shorts' },
@@ -129,7 +130,7 @@ export default function ExportPage() {
       <div className="max-w-7xl mx-auto px-4 py-12">
         <div className="bg-black-card border-2 border-red-hot p-8 text-center">
           <p className="text-red-hot font-bold uppercase mb-2">Error Loading Video</p>
-          <p className="text-white-muted text-sm mb-6">{videoError}</p>
+          <FormError message={videoError} className="text-white-muted text-sm mb-6" />
           <Link
             to="/"
             className="inline-block bg-red-hot text-white px-6 py-3 text-sm font-bold uppercase tracking-wide border-2 border-red-hot hover:bg-red-dim transition-all"

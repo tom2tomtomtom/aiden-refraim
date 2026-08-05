@@ -2,10 +2,12 @@ import { supabase } from '../config/supabase';
 import path from 'path';
 import fs from 'fs';
 import { analyzeVideo } from './videoAnalysisService';
-import { StorageService } from './storageService';
+import { StorageService, PIPELINE_SIGNED_URL_TTL_SECONDS } from './storageService';
 import { OUTPUT_FORMATS, OutputFormat } from '../config/outputFormats';
-import { FFmpegService, FocusPoint } from './ffmpegService';
+import { FFmpegService } from './ffmpegService';
 import { defaultConfig, VideoProcessingConfig } from '../config/videoProcessing';
+import { findSourceLimitViolation, renderTimeoutMs } from '../config/mediaLimits';
+import { startExportHeartbeat } from '../lib/exportLease';
 
 interface Video {
   id: string;
@@ -40,11 +42,6 @@ export interface VideoProcessor {
     platforms: string[],
     context: ProcessingRunContext,
   ): Promise<ProcessingOutcome>;
-  processWithFocusPoints(
-    video: Video,
-    platforms: string[],
-    options?: { letterbox?: boolean; quality?: 'low' | 'medium' | 'high' }
-  ): Promise<void>;
 }
 
 export interface ProcessingOutcome {
@@ -91,6 +88,30 @@ export interface VideoAnalysis {
 }
 
 class ProcessingOwnershipLostError extends Error {}
+export class SourceTooLargeError extends Error {}
+
+/**
+ * The route rejects an oversized source before billing, but a video uploaded
+ * before the caps existed, or one the route could not probe, reaches here.
+ * This runs against the measured source and before the first re-encode, so
+ * the per-platform loop can never multiply unbounded work.
+ */
+const assertSourceWithinLimits = (analysis: VideoAnalysis): void => {
+  const measured = analysis.metadata;
+  // A partial measurement can't be judged either way. Both gates in front of
+  // this probe a complete one, so only an analyzer that reported less than it
+  // normally does lands here.
+  if (!measured?.resolution) return;
+
+  const violation = findSourceLimitViolation({
+    durationSeconds: measured.duration,
+    width: measured.resolution.width,
+    height: measured.resolution.height,
+  });
+  if (violation) {
+    throw new SourceTooLargeError(violation.message);
+  }
+};
 
 class BasicVideoProcessor implements VideoProcessor {
   private config: VideoProcessingConfig;
@@ -173,12 +194,18 @@ class BasicVideoProcessor implements VideoProcessor {
       }
 
       // The bucket is private (F-012): mint a signed URL for FFmpeg/analysis
-      // reads. The stored original_url is only a path identifier.
+      // reads. The stored original_url is only a path identifier. This one
+      // signature has to survive every platform render in the run, so it uses
+      // the pipeline TTL rather than the short browser-facing default.
       const sourceUrl =
-        (await StorageService.getSignedUrl(video.original_url)) ?? video.original_url;
+        (await StorageService.getSignedUrl(
+          video.original_url,
+          PIPELINE_SIGNED_URL_TTL_SECONDS,
+        )) ?? video.original_url;
 
       // Analyze video to detect subjects and important regions
       const analysisResult = await this.analyzer.analyze(sourceUrl);
+      assertSourceWithinLimits(analysisResult);
       await this.updateVideoStatus(
         video.id, processingStatus, undefined, 20, context.jobId, [processingStatus],
       );
@@ -216,6 +243,14 @@ class BasicVideoProcessor implements VideoProcessor {
         const format = OUTPUT_FORMATS[platform];
         if (!format) continue;
 
+        // A render writes no progress while it runs, so this is the only
+        // window in which "stuck" and "working" look identical from outside.
+        // Hold the lease across exactly that window and no longer.
+        const stopHeartbeat = startExportHeartbeat(
+          context.jobId,
+          video.user_id,
+          renderTimeoutMs(analysisResult.metadata?.duration),
+        );
         try {
           // Process video according to platform requirements
           const outputPath = path.join(this.config.processingOptions.tempDir, `${video.id}-${platform}.mp4`);
@@ -266,6 +301,8 @@ class BasicVideoProcessor implements VideoProcessor {
           await this.updateVideoStatus(
             video.id, processingStatus, undefined, progress, context.jobId, [processingStatus],
           );
+        } finally {
+          stopHeartbeat();
         }
       }
 
@@ -365,176 +402,6 @@ class BasicVideoProcessor implements VideoProcessor {
     return filters;
   }
 
-  /**
-   * Enhanced processing pipeline that reads focus points from the database
-   * and uses multi-segment focus-point-aware cropping.
-   */
-  async processWithFocusPoints(
-    video: Video,
-    platforms: string[],
-    options: { letterbox?: boolean; quality?: 'low' | 'medium' | 'high' } = {}
-  ): Promise<void> {
-    const letterbox = options.letterbox ?? false;
-    const quality = options.quality ?? 'medium';
-
-    try {
-      await this.updateVideoStatus(video.id, 'processing', undefined, 0);
-
-      // Ensure output directories exist. See process() for details.
-      // `/tmp/uploads` is the ffmpeg output target and must exist.
-      const processedDir = path.join('/tmp', 'processed');
-      if (!fs.existsSync(processedDir)) {
-        fs.mkdirSync(processedDir, { recursive: true });
-      }
-      const tempDir = this.config.processingOptions.tempDir;
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
-      }
-
-      // Fetch focus points for this video
-      const { data: focusPoints, error: fpError } = await supabase
-        .from('focus_points')
-        .select('*')
-        .eq('video_id', video.id)
-        .order('time_start');
-
-      if (fpError) {
-        console.error('Failed to fetch focus points:', fpError);
-        throw fpError;
-      }
-
-      const typedFocusPoints: FocusPoint[] = (focusPoints || []).map((fp: any) => ({
-        time_start: fp.time_start,
-        time_end: fp.time_end,
-        x: fp.x,
-        y: fp.y,
-        description: fp.description || '',
-      }));
-
-      await this.updateVideoStatus(video.id, 'processing', undefined, 10);
-
-      // Private bucket (F-012): sign once, use for every read in this run.
-      const sourceUrl =
-        (await StorageService.getSignedUrl(video.original_url)) ?? video.original_url;
-
-      // Analyze video for metadata (still useful for storing analysis)
-      const analysisResult = await this.analyzer.analyze(sourceUrl);
-      await this.updateVideoStatus(video.id, 'processing', undefined, 20);
-
-      // Store analysis results
-      const { error: updateError } = await supabase
-        .from('videos')
-        .update({ processing_metadata: analysisResult })
-        .eq('id', video.id);
-
-      if (updateError) throw updateError;
-      await this.updateVideoStatus(video.id, 'processing', undefined, 30);
-
-      // Process for each platform
-      const platformOutputs: Record<string, any> = {};
-      const platformCount = platforms.length;
-      let completedPlatforms = 0;
-
-      for (const platform of platforms) {
-        const format = OUTPUT_FORMATS[platform];
-        if (!format) continue;
-
-        try {
-          const outputPath = path.join(
-            this.config.processingOptions.tempDir,
-            `${video.id}-${platform}.mp4`
-          );
-
-          if (typedFocusPoints.length > 0) {
-            // Use new segment-based processing with focus points
-            await FFmpegService.processVideoWithSegments(
-              sourceUrl,
-              outputPath,
-              {
-                width: format.width,
-                height: format.height,
-                aspectRatio: format.aspectRatio,
-              },
-              typedFocusPoints,
-              { letterbox, quality }
-            );
-          } else {
-            // Fall back to original processing when no focus points exist
-            const fallbackRegion = analysisResult.focusRegion || { x: 0, y: 0, width: 0, height: 0 };
-            await FFmpegService.processVideo(
-              sourceUrl,
-              outputPath,
-              {
-                width: format.width,
-                height: format.height,
-                aspectRatio: format.aspectRatio,
-                filters: this.getFormatFilters(format),
-                bitrate: format.bitrate,
-                metadata: analysisResult.metadata,
-              },
-              fallbackRegion,
-              platform
-            );
-          }
-
-          platformOutputs[platform] = {
-            url: outputPath,
-            format: format.aspectRatio,
-            width: format.width,
-            height: format.height,
-            status: 'complete',
-          };
-          completedPlatforms++;
-          const progress = 30 + Math.floor((completedPlatforms / platformCount) * 60);
-          await this.updateVideoStatus(video.id, 'processing', undefined, progress);
-        } catch (error) {
-          // See process() for rationale. Generic message to client; full
-          // raw error (including ffmpeg stderr) to server logs only.
-          const errorId = `err_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-          console.error(`[${errorId}] Error processing video with focus points for ${platform}:`, error);
-          platformOutputs[platform] = {
-            error: `Processing failed for ${platform}. Please try again.`,
-            errorId,
-            status: 'error',
-          };
-          completedPlatforms++;
-          const progress = 30 + Math.floor((completedPlatforms / platformCount) * 60);
-          await this.updateVideoStatus(video.id, 'processing', undefined, progress);
-        }
-      }
-
-      await this.updateVideoStatus(video.id, 'processing', undefined, 90);
-
-      // Update video with processed outputs
-      const { error: updateError3 } = await supabase
-        .from('videos')
-        .update({
-          status: Object.values(platformOutputs).some(output => output.status === 'error')
-            ? 'failed'
-            : 'completed',
-          platform_outputs: platformOutputs,
-        })
-        .eq('id', video.id);
-
-      if (updateError3) throw updateError3;
-
-      // Always terminate at 100. 'failed' is terminal too. See process()
-      // for the fuller explanation. Previously stuck at 90 on any error.
-      const finalStatus = Object.values(platformOutputs).some(output => output.status === 'error')
-        ? 'failed'
-        : 'completed';
-      await this.updateVideoStatus(video.id, finalStatus, undefined, 100);
-    } catch (error) {
-      console.error('Video processing with focus points failed:', error);
-      await this.updateVideoStatus(
-        video.id,
-        'failed',
-        error instanceof Error ? error.message : 'Unknown error',
-        100
-      );
-      throw error;
-    }
-  }
 }
 
 // Export singleton instance for MVP

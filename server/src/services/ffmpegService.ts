@@ -1,7 +1,10 @@
 import { spawn } from 'child_process';
 import { unlinkSync, existsSync } from 'fs';
+import { randomUUID } from 'node:crypto';
 import path from 'path';
 import { StorageService } from './storageService';
+import { guardMediaProcess } from '../lib/mediaProcess';
+import { PROBE_TIMEOUT_MS, renderTimeoutMs } from '../config/mediaLimits';
 
 interface ProcessingFormat {
   width: number;
@@ -17,6 +20,18 @@ interface ProcessingFormat {
       height: number;
     };
   };
+}
+
+/**
+ * Best-effort delete. Cleanup runs in `finally` blocks that must not mask the
+ * error that got them there, and the file is often already gone.
+ */
+function removeIfPresent(filePath: string): void {
+  try {
+    if (existsSync(filePath)) unlinkSync(filePath);
+  } catch (err) {
+    console.warn(`Failed to remove temporary file ${filePath}:`, err);
+  }
 }
 
 export interface CropSegment {
@@ -44,7 +59,11 @@ const QUALITY_PRESETS: Record<QualityPreset, { preset: string; crf: string }> = 
 };
 
 export class FFmpegService {
-  private static async getVideoMetadata(inputPath: string): Promise<{
+  /**
+   * Public because it is the enforcement point for the input caps: callers
+   * measure a source here before committing to any re-encode.
+   */
+  static async getVideoMetadata(inputPath: string): Promise<{
     width: number;
     height: number;
     duration: number;
@@ -57,11 +76,13 @@ export class FFmpegService {
         '-select_streams',
         'v:0',
         '-show_entries',
-        'stream=width,height,duration,r_frame_rate',
+        'stream=width,height,duration,r_frame_rate:format=duration',
         '-of',
         'json',
         inputPath,
       ]);
+
+      guardMediaProcess(ffprobe, { label: 'ffprobe', timeoutMs: PROBE_TIMEOUT_MS }, reject);
 
       let output = '';
       ffprobe.stdout.on('data', (data) => {
@@ -78,10 +99,16 @@ export class FFmpegService {
           const metadata = JSON.parse(output);
           const stream = metadata.streams[0];
           const [num, den] = stream.r_frame_rate.split('/');
+          // Some containers carry duration only at the format level, so fall
+          // back rather than reporting a source as unmeasurable.
+          const streamDuration = parseFloat(stream.duration);
+          const duration = Number.isFinite(streamDuration)
+            ? streamDuration
+            : parseFloat(metadata.format?.duration);
           resolve({
             width: stream.width,
             height: stream.height,
-            duration: parseFloat(stream.duration),
+            duration,
             fps: Math.round(parseInt(num) / parseInt(den))
           });
         } catch (error) {
@@ -137,8 +164,33 @@ export class FFmpegService {
     focusRegion: { x: number; y: number; width: number; height: number },
     platform: string
   ): Promise<string> {
-    // Download video to temp location
-    const tempInputPath = path.join('/tmp', `input-${Date.now()}.mp4`);
+    // Download video to temp location. The name is random rather than
+    // timestamped: two exports starting in the same millisecond would
+    // otherwise share a path, and the first to finish would delete the file
+    // the second was still reading.
+    const tempInputPath = path.join('/tmp', `input-${randomUUID()}.mp4`);
+    try {
+      return await this.renderFromSource(
+        inputUrl, tempInputPath, outputPath, format, focusRegion, platform,
+      );
+    } finally {
+      // The source copy outlives nothing. It used to survive every render,
+      // success or failure, at full source size and once per platform.
+      removeIfPresent(tempInputPath);
+      // uploadProcessedVideo deletes the render on the success path only, so
+      // a failed ffmpeg run or a failed upload used to leave it behind too.
+      removeIfPresent(outputPath);
+    }
+  }
+
+  private static async renderFromSource(
+    inputUrl: string,
+    tempInputPath: string,
+    outputPath: string,
+    format: ProcessingFormat,
+    focusRegion: { x: number; y: number; width: number; height: number },
+    platform: string
+  ): Promise<string> {
     await StorageService.downloadVideo(inputUrl, tempInputPath);
 
     // Get video metadata
@@ -185,6 +237,12 @@ export class FFmpegService {
 
     return new Promise((resolve, reject) => {
       const ffmpeg = spawn('ffmpeg', args);
+
+      guardMediaProcess(
+        ffmpeg,
+        { label: `ffmpeg render for ${platform}`, timeoutMs: renderTimeoutMs(metadata.duration) },
+        reject,
+      );
 
       // Collect error output
       let errorOutput = '';
@@ -328,9 +386,10 @@ export class FFmpegService {
   /**
    * Run a single FFmpeg command and return a promise.
    */
-  private static runFfmpeg(args: string[]): Promise<void> {
+  private static runFfmpeg(args: string[], timeoutMs: number): Promise<void> {
     return new Promise((resolve, reject) => {
       const proc = spawn('ffmpeg', args);
+      guardMediaProcess(proc, { label: 'ffmpeg', timeoutMs }, reject);
       let errorOutput = '';
       proc.stderr.on('data', (data) => {
         errorOutput += data.toString();
@@ -359,13 +418,28 @@ export class FFmpegService {
     let localInput = inputPath;
     const isUrl = inputPath.startsWith('http://') || inputPath.startsWith('https://');
     if (isUrl) {
-      localInput = path.join('/tmp', `input-seg-${Date.now()}.mp4`);
+      localInput = path.join('/tmp', `input-seg-${randomUUID()}.mp4`);
       await StorageService.downloadVideo(inputPath, localInput);
     }
 
+    try {
+      return await this.renderSegments(localInput, outputPath, format, focusPoints, options);
+    } finally {
+      if (isUrl) removeIfPresent(localInput);
+    }
+  }
+
+  private static async renderSegments(
+    localInput: string,
+    outputPath: string,
+    format: { width: number; height: number; aspectRatio: string },
+    focusPoints: FocusPoint[],
+    options: { letterbox: boolean; quality: QualityPreset }
+  ): Promise<string> {
     const metadata = await this.getVideoMetadata(localInput);
     const segments = this.buildSegments(focusPoints, metadata.duration);
     const quality = QUALITY_PRESETS[options.quality];
+    const segmentTimeoutMs = renderTimeoutMs(metadata.duration);
 
     // Single segment: process directly
     if (segments.length <= 1) {
@@ -391,22 +465,20 @@ export class FFmpegService {
         outputPath,
       ];
 
-      await this.runFfmpeg(args);
-
-      // Clean up temp input
-      if (isUrl && existsSync(localInput)) unlinkSync(localInput);
+      await this.runFfmpeg(args, segmentTimeoutMs);
 
       return outputPath;
     }
 
     // Multiple segments: process each, then concat
     const segmentFiles: string[] = [];
-    const concatListPath = path.join('/tmp', `concat-${Date.now()}.txt`);
+    const runId = randomUUID();
+    const concatListPath = path.join('/tmp', `concat-${runId}.txt`);
 
     try {
       for (let i = 0; i < segments.length; i++) {
         const seg = segments[i];
-        const segPath = path.join('/tmp', `seg-${Date.now()}-${i}.mp4`);
+        const segPath = path.join('/tmp', `seg-${runId}-${i}.mp4`);
         segmentFiles.push(segPath);
 
         const filter = this.buildCropFilter(
@@ -433,7 +505,7 @@ export class FFmpegService {
           segPath,
         ];
 
-        await this.runFfmpeg(args);
+        await this.runFfmpeg(args, segmentTimeoutMs);
       }
 
       // Write concat list file
@@ -450,16 +522,12 @@ export class FFmpegService {
         outputPath,
       ];
 
-      await this.runFfmpeg(concatArgs);
+      await this.runFfmpeg(concatArgs, segmentTimeoutMs);
 
       return outputPath;
     } finally {
-      // Clean up temp files
-      for (const f of segmentFiles) {
-        if (existsSync(f)) unlinkSync(f);
-      }
-      if (existsSync(concatListPath)) unlinkSync(concatListPath);
-      if (isUrl && existsSync(localInput)) unlinkSync(localInput);
+      for (const f of segmentFiles) removeIfPresent(f);
+      removeIfPresent(concatListPath);
     }
   }
 }

@@ -6,6 +6,7 @@ import VideoScannerService from '../../services/VideoScannerService';
 import type { Subject as ScannerSubject } from '../../services/VideoScannerService';
 import type { Subject, ScanOptions, ScanStatus } from '../../types/scan';
 import type { FocusPointCreate } from '../../types/focusPoint';
+import { FormError } from '../ui/form-error';
 import { Sparkles, Play, Pause, PenTool, X, Star, BookOpen, ShieldCheck, AlertTriangle, Wrench, RefreshCw, SlidersHorizontal, Move, Maximize2, Type } from 'lucide-react';
 
 const PLATFORM_ASPECT_RATIOS: Record<string, [number, number]> = {
@@ -903,8 +904,8 @@ export default function FocusSelector() {
 
         const centerX = (focusX / 100) * vw;
         const centerY = (focusY / 100) * vh;
-        let srcX = Math.max(0, Math.min(vw - srcW, centerX - srcW / 2));
-        let srcY = Math.max(0, Math.min(vh - srcH, centerY - srcH / 2));
+        const srcX = Math.max(0, Math.min(vw - srcW, centerX - srcW / 2));
+        const srcY = Math.max(0, Math.min(vh - srcH, centerY - srcH / 2));
 
         cropCtx.clearRect(0, 0, cropWidth, cropHeight);
         cropCtx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, cropWidth, cropHeight);
@@ -2774,13 +2775,10 @@ export default function FocusSelector() {
         </div>
       )}
 
-      {/* Error display */}
-      {error && (
-        <div className="mt-3 p-3 bg-black-card border-2 border-red-hot">
-          <p className="text-red-hot text-xs font-bold uppercase">Error</p>
-          <p className="text-white-muted text-xs mt-1">{error}</p>
-        </div>
-      )}
+      <FormError
+        message={error}
+        className="mt-3 p-3 bg-black-card border-2 border-red-hot text-white-muted text-xs"
+      />
     </div>
   );
 }

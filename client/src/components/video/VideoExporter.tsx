@@ -4,6 +4,7 @@ import { useFocusPoints } from '../../contexts/FocusPointsContext';
 import { useApi } from '../../contexts/ApiContext';
 import { OUTPUT_FORMATS, ExportQuality } from '../../types/video';
 import type { ProcessingStatus } from '../../api';
+import { FormError } from '../ui/form-error';
 
 interface PlanState {
   plan: string;
@@ -263,12 +264,10 @@ export default function VideoExporter() {
         </div>
       )}
 
-      {error && (
-        <div className="mb-4 p-3 bg-black-card border-2 border-red-hot">
-          <p className="text-red-hot text-xs font-bold uppercase">Error</p>
-          <p className="text-white-muted text-xs mt-1">{error}</p>
-        </div>
-      )}
+      <FormError
+        message={error}
+        className="mb-4 p-3 bg-black-card border-2 border-red-hot text-white-muted text-xs"
+      />
 
       {/* Platform selection */}
       <div className="mb-4">
