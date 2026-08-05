@@ -8,6 +8,7 @@ import {
   CropReviewInput,
 } from '../services/aiEditorService';
 import { supabase } from '../config/supabase';
+import { authorizeAiSpend, settleAiSpend } from '../lib/ai-metering';
 
 // Hard input caps. These routes fan out to LLM calls that bill per
 // request and per token, so we refuse anything that would let a single
@@ -154,6 +155,19 @@ export const getAIFocusStrategy = async (req: Request, res: Response) => {
         })
       : undefined;
 
+    // Ownership and every input cap are already settled above, so nothing
+    // beyond this point can inflate what the provider is asked to do.
+    const spend = await authorizeAiSpend(user.id, 'ai_focus_strategy');
+    if (!spend.paid && spend.reason === 'insufficient_tokens') {
+      return res.status(402).json({
+        error: 'Insufficient tokens',
+        message: 'Your token balance is too low for an AI focus suggestion.',
+        required: spend.required,
+        balance: spend.balance,
+        upgradeUrl: '/#/billing',
+      });
+    }
+
     const strategy = await generateFocusStrategy(
       subjectInputs,
       duration,
@@ -161,7 +175,18 @@ export const getAIFocusStrategy = async (req: Request, res: Response) => {
       brief || undefined,
       annotationInputs,
       keyFrameInputs,
+      { allowPaidProvider: spend.paid },
     );
+
+    // Settle before the result is visible, and only for work that was paid
+    // for. A settlement we cannot complete must not hand back free output.
+    if (spend.paid && !await settleAiSpend(user.id, 'ai_focus_strategy', spend.requestId)) {
+      return res.status(402).json({
+        error: 'Could not complete billing for this suggestion',
+        message: 'We could not settle the token charge, so the suggestion was not returned. Please retry.',
+        retryable: true,
+      });
+    }
 
     return res.json(strategy);
   } catch (error) {
@@ -216,7 +241,27 @@ export const reviewCropQuality = async (req: Request, res: Response) => {
       };
     });
 
-    const reviews = await reviewCrops(cropInputs, platform);
+    const spend = await authorizeAiSpend(user.id, 'crop_review');
+    if (!spend.paid && spend.reason === 'insufficient_tokens') {
+      return res.status(402).json({
+        error: 'Insufficient tokens',
+        message: 'Your token balance is too low for an AI crop review.',
+        required: spend.required,
+        balance: spend.balance,
+        upgradeUrl: '/#/billing',
+      });
+    }
+
+    const reviews = await reviewCrops(cropInputs, platform, { allowPaidProvider: spend.paid });
+
+    if (spend.paid && !await settleAiSpend(user.id, 'crop_review', spend.requestId)) {
+      return res.status(402).json({
+        error: 'Could not complete billing for this review',
+        message: 'We could not settle the token charge, so the review was not returned. Please retry.',
+        retryable: true,
+      });
+    }
+
     return res.json({ reviews });
   } catch (error) {
     console.error('Error in reviewCropQuality:', error);

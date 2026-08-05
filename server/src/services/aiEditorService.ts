@@ -65,10 +65,12 @@ export async function generateFocusStrategy(
   storyBrief?: string,
   annotations?: StoryAnnotationInput[],
   keyFrames?: KeyFrameInput[],
+  options: { allowPaidProvider?: boolean } = {},
 ): Promise<FocusStrategy> {
+  const allowPaidProvider = options.allowPaidProvider ?? true;
   const apiKey = process.env.ANTHROPIC_API_KEY;
 
-  if (!apiKey) {
+  if (!apiKey || !allowPaidProvider) {
     return generateRuleBasedStrategy(subjects, videoDuration, targetPlatform);
   }
 
@@ -445,9 +447,10 @@ export interface CropReviewResult {
 export async function reviewCrops(
   crops: CropReviewInput[],
   targetPlatform: string,
+  options: { allowPaidProvider?: boolean } = {},
 ): Promise<CropReviewResult[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
+  if (!apiKey || options.allowPaidProvider === false) {
     return crops.map(c => ({ time: c.time, quality: 'good' as const, issues: [], suggestion: '' }));
   }
 
