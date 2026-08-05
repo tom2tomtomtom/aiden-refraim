@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { Video } from '../api';
 import { useApi } from '../contexts/ApiContext';
 import { Trash2, Play, Settings, AlertTriangle } from 'lucide-react';
+import { FormError } from './ui/form-error';
 
 function formatVideoName(url: string): string {
   const filename = url.split('/').pop() || 'Untitled Video';
@@ -98,8 +99,8 @@ export function VideoList({ onVideoSelect, onDeleteVideo }: VideoListProps) {
 
   if (error) {
     return (
-      <div className="text-center text-red-500 p-4">
-        {error}
+      <div className="p-4">
+        <FormError message={error} className="text-center text-red-500" />
         <button
           onClick={loadVideos}
           className="ml-2 text-orange-accent hover:underline"

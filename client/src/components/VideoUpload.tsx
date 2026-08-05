@@ -110,10 +110,19 @@ export function VideoUpload({ onUploadComplete, onError }: VideoUploadProps) {
             <p className="text-sm text-white-muted">{file.name}</p>
             {uploading && (
               <div className="w-full max-w-xs mx-auto">
-                <div className="w-full h-3 bg-black-deep">
+                <div
+                  className="w-full h-3 bg-black-deep"
+                  role="progressbar"
+                  aria-valuenow={uploadProgress}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label="Upload progress"
+                >
                   <div className="h-full bg-red-hot transition-all" style={{ width: `${uploadProgress}%` }} />
                 </div>
-                <p className="text-xs text-white-dim mt-1">
+                {/* An upload can run for minutes. Polite, and atomic so the
+                    whole sentence is read rather than the digits that changed. */}
+                <p className="text-xs text-white-dim mt-1" aria-live="polite" aria-atomic="true">
                   {uploadProgress < 99
                     ? `${uploadProgress}%`
                     : uploadProgress < 100
