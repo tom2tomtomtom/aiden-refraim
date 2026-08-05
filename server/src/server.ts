@@ -7,10 +7,12 @@ import './instrument';
 import app from './app';
 import { InitializationService } from './services/initializationService';
 import { validateSupabaseEnvOrExit } from './lib/supabase-env';
+import { assertGatewayJwtSecretConfigured } from './lib/startup-guards';
 import { startExportReaper } from './lib/exportReaper';
 
 // Fail loud at startup if SUPABASE_URL is missing or points at the wrong
 // project. Must run before any Supabase client is constructed.
+assertGatewayJwtSecretConfigured();
 validateSupabaseEnvOrExit();
 
 const port = process.env.PORT || 3000;
