@@ -32,6 +32,7 @@ jest.mock('../../services/videoProcessingService', () => ({
 
 jest.mock('../../lib/videoSignature', () => ({
   fileHasVideoSignature: jest.fn().mockResolvedValue(true),
+  detectFileVideoContainer: jest.fn().mockResolvedValue('iso-bmff'),
 }));
 
 jest.mock('../../lib/quota', () => ({
@@ -59,6 +60,7 @@ import { FFmpegService } from '../../services/ffmpegService';
 import { StorageService } from '../../services/storageService';
 import { DatabaseService } from '../../services/databaseService';
 import { getQuotaState } from '../../lib/quota';
+import { detectFileVideoContainer } from '../../lib/videoSignature';
 import { MAX_SOURCE_DURATION_SECONDS } from '../../config/mediaLimits';
 
 const probe = FFmpegService.getVideoMetadata as jest.Mock;
@@ -139,6 +141,74 @@ describe('upload rejects sources whose render cost is unbounded', () => {
     expect((res.json as jest.Mock).mock.calls[0][0]).toMatchObject({
       source: { durationSeconds: 12.5, width: 1920, height: 1080 },
     });
+  });
+});
+
+/**
+ * F-054: a valid .webm passed multer's `video/*` filter and the byte sniffer,
+ * then died inside StorageService.uploadVideo's extension check, which the
+ * handler could only report as "Error uploading video" with a 500.
+ */
+describe('upload rejects supported-looking video in an unsupported container', () => {
+  const webmReq = (): Request => ({
+    user: { id: 'user-1' },
+    body: { platforms: JSON.stringify(['tiktok']) },
+    file: {
+      path: '/tmp/upload-1',
+      originalname: 'clip.webm',
+      size: 1024,
+      mimetype: 'video/webm',
+    },
+  } as any);
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (detectFileVideoContainer as jest.Mock).mockResolvedValue('matroska');
+    probe.mockResolvedValue({ width: 1920, height: 1080, duration: 12.5, fps: 30 });
+  });
+
+  it('answers 415 naming the format, not 500', async () => {
+    const res = mockRes();
+
+    await uploadVideo(webmReq(), res);
+
+    expect(res.status).toHaveBeenCalledWith(415);
+    const body = (res.json as jest.Mock).mock.calls[0][0];
+    expect(body.error).toContain('Matroska or WebM');
+    expect(body.error).toContain('MP4, MOV, or AVI');
+    expect(body.supported).toEqual(['.mp4', '.mov', '.avi']);
+  });
+
+  it('rejects before probing, so the container never reaches storage', async () => {
+    const res = mockRes();
+
+    await uploadVideo(webmReq(), res);
+
+    // Wave one's format-duration fallback made webm measurable, which is why
+    // this now has to be stopped by container rather than by measurement.
+    expect(probe).not.toHaveBeenCalled();
+    expect(StorageService.uploadVideo).not.toHaveBeenCalled();
+    expect(DatabaseService.createVideo).not.toHaveBeenCalled();
+  });
+
+  it('still rejects a file that is not a video at all, separately', async () => {
+    (detectFileVideoContainer as jest.Mock).mockResolvedValue(null);
+    const res = mockRes();
+
+    await uploadVideo(webmReq(), res);
+
+    expect(res.status).toHaveBeenCalledWith(415);
+    expect((res.json as jest.Mock).mock.calls[0][0].error).toContain('not a supported video');
+  });
+
+  it('rejects a supported container carrying an unsupported extension', async () => {
+    (detectFileVideoContainer as jest.Mock).mockResolvedValue('iso-bmff');
+    const res = mockRes();
+
+    await uploadVideo(webmReq(), res);
+
+    expect(res.status).toHaveBeenCalledWith(415);
+    expect(StorageService.uploadVideo).not.toHaveBeenCalled();
   });
 });
 

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import fs from 'fs';
+import path from 'path';
 import { processVideoForPlatforms } from '../services/videoProcessingService';
 import { StorageService } from '../services/storageService';
 import { DatabaseService } from '../services/databaseService';
@@ -27,12 +28,19 @@ import {
   recoverExportState,
 } from '../lib/exportRecovery';
 import { resolveBillingPath } from '../lib/billing-path';
-import { fileHasVideoSignature } from '../lib/videoSignature';
+import { detectFileVideoContainer } from '../lib/videoSignature';
 import { FFmpegService } from '../services/ffmpegService';
 import {
   MAX_OUTPUTS_PER_EXPORT,
   findSourceLimitViolation,
 } from '../config/mediaLimits';
+import {
+  SUPPORTED_EXTENSIONS,
+  SUPPORTED_FORMATS_PHRASE,
+  isSupportedContainer,
+  unsupportedContainerMessage,
+  unsupportedExtensionMessage,
+} from '../config/uploadFormats';
 
 const VALID_PLATFORMS = [
   'instagram-story',
@@ -110,11 +118,35 @@ export const uploadVideo = async (req: Request, res: Response) => {
     // The multer fileFilter only trusts the client-supplied mimetype (derived
     // from the file extension), so a non-video renamed to `.mp4` slips through.
     // Sniff the actual bytes on disk before spending storage/DB writes on it.
-    if (!(await fileHasVideoSignature(req.file.path))) {
+    const container = await detectFileVideoContainer(req.file.path);
+    if (container === null) {
       console.warn('Rejected non-video upload:', req.file.originalname);
       safeUnlink(tempPath);
       return res.status(415).json({
-        error: 'Invalid file: not a supported video. Please upload an MP4, MOV, or AVI file.',
+        error: `Invalid file: not a supported video. Please upload ${SUPPORTED_FORMATS_PHRASE}.`,
+      });
+    }
+
+    // A real video in a container storage will not take. Rejecting it here,
+    // by name, is what stops it reaching the storage call and surfacing as an
+    // opaque 500 several steps later.
+    if (!isSupportedContainer(container)) {
+      console.warn('Rejected unsupported container:', req.file.originalname, container);
+      safeUnlink(tempPath);
+      return res.status(415).json({
+        error: unsupportedContainerMessage(container),
+        container,
+        supported: SUPPORTED_EXTENSIONS,
+      });
+    }
+
+    const extension = path.extname(req.file.originalname).toLowerCase();
+    if (!SUPPORTED_EXTENSIONS.includes(extension)) {
+      console.warn('Rejected unsupported extension:', req.file.originalname);
+      safeUnlink(tempPath);
+      return res.status(415).json({
+        error: unsupportedExtensionMessage(extension || 'these'),
+        supported: SUPPORTED_EXTENSIONS,
       });
     }
 

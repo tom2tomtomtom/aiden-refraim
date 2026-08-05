@@ -4,6 +4,7 @@ import path from 'path';
 import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import axios from 'axios';
+import { SUPPORTED_EXTENSIONS, SUPPORTED_MIME_TYPES } from '../config/uploadFormats';
 
 const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'videos';
 
@@ -47,7 +48,7 @@ export class StorageService {
         console.log(`Creating storage bucket: ${STORAGE_BUCKET}`);
         const { error: createError } = await supabase.storage.createBucket(STORAGE_BUCKET, {
           public: false,
-          allowedMimeTypes: ['video/mp4', 'video/quicktime', 'video/x-msvideo']
+          allowedMimeTypes: [...SUPPORTED_MIME_TYPES],
         });
         if (createError) throw createError;
       }
@@ -55,7 +56,7 @@ export class StorageService {
       // Enforce private access; reads use signed URLs (F-012).
       const { error: updateError } = await supabase.storage.updateBucket(STORAGE_BUCKET, {
         public: false,
-        allowedMimeTypes: ['video/mp4', 'video/quicktime', 'video/x-msvideo']
+        allowedMimeTypes: [...SUPPORTED_MIME_TYPES],
       });
       if (updateError) throw updateError;
 
@@ -147,9 +148,10 @@ export class StorageService {
       }
 
       const fileExt = path.extname(fileName).toLowerCase();
-      const allowedExtensions = ['.mp4', '.mov', '.avi'];
-      if (!allowedExtensions.includes(fileExt)) {
-        throw new Error(`Invalid file extension: ${fileExt}. Allowed: ${allowedExtensions.join(', ')}`);
+      if (!SUPPORTED_EXTENSIONS.includes(fileExt)) {
+        throw new Error(
+          `Invalid file extension: ${fileExt}. Allowed: ${SUPPORTED_EXTENSIONS.join(', ')}`,
+        );
       }
 
       // 2. Ensure bucket exists
