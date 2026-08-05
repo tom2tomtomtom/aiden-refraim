@@ -56,8 +56,10 @@ jest.mock('../../services/databaseService', () => ({
   },
 }));
 
+const mockRpc = jest.fn();
+
 jest.mock('../../config/supabase', () => ({
-  supabase: {},
+  supabase: { rpc: (...args: unknown[]) => mockRpc(...args) },
 }));
 
 jest.mock('../../lib/quota', () => ({
@@ -94,6 +96,8 @@ describe('processVideo billing settlement', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.AIDEN_SERVICE_KEY = 'service-key';
+    // No other export running, so the concurrency cap never fires here.
+    mockRpc.mockResolvedValue({ data: 0, error: null });
     mockGetVideo.mockResolvedValue({
       id: 'video-1',
       user_id: 'user-1',

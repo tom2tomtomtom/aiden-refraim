@@ -66,6 +66,7 @@ import { DatabaseService } from '../../services/databaseService';
 import { getQuotaState } from '../../lib/quota';
 import { detectFileVideoContainer } from '../../lib/videoSignature';
 import { MAX_STORAGE_BYTES_PER_USER } from '../../lib/storageQuota';
+import { MAX_CONCURRENT_EXPORTS_PER_USER } from '../../lib/exportConcurrency';
 import { MAX_SOURCE_DURATION_SECONDS } from '../../config/mediaLimits';
 
 const probe = FFmpegService.getVideoMetadata as jest.Mock;
@@ -247,6 +248,7 @@ describe('upload rejects supported-looking video in an unsupported container', (
 describe('export rejects unbounded work before it costs the caller anything', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockRpc.mockResolvedValue({ data: 0, error: null });
     (StorageService.getSignedUrl as jest.Mock).mockResolvedValue('https://signed.example/src.mp4');
     (DatabaseService.getVideo as jest.Mock).mockResolvedValue({
       id: 'video-1',
@@ -254,6 +256,22 @@ describe('export rejects unbounded work before it costs the caller anything', ()
       original_url: 'videos/clip.mp4',
       status: 'UPLOADED',
     });
+  });
+
+  it('turns away an account already at its concurrent-export cap', async () => {
+    mockRpc.mockResolvedValue({ data: MAX_CONCURRENT_EXPORTS_PER_USER, error: null });
+    probe.mockResolvedValue({ width: 1920, height: 1080, duration: 10, fps: 30 });
+    const res = mockRes();
+
+    await processVideo(processReq(['tiktok']), res);
+
+    expect(res.status).toHaveBeenCalledWith(429);
+    expect((res.json as jest.Mock).mock.calls[0][0]).toMatchObject({ retryable: true });
+    // Refused before the probe, so a saturating account cannot spend the
+    // renderer's time just being told no.
+    expect(probe).not.toHaveBeenCalled();
+    expect(getQuotaState).not.toHaveBeenCalled();
+    expect(DatabaseService.createProcessingJob).not.toHaveBeenCalled();
   });
 
   it('rejects an over-long source with 413 without resolving a billing path', async () => {

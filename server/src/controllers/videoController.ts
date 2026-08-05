@@ -35,6 +35,7 @@ import {
   findSourceLimitViolation,
 } from '../config/mediaLimits';
 import { checkStorageQuota, storageQuotaMessage } from '../lib/storageQuota';
+import { CONCURRENCY_MESSAGE, checkExportConcurrency } from '../lib/exportConcurrency';
 import {
   SUPPORTED_EXTENSIONS,
   SUPPORTED_FORMATS_PHRASE,
@@ -428,6 +429,19 @@ export const processVideo = async (req: Request, res: Response) => {
 
     if (video.user_id !== user.id) {
       return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // Ownership is settled, nothing has been reserved or charged yet, and the
+    // probe below costs real work — so this is the point to turn away an
+    // account that is already saturating the renderer.
+    const concurrency = await checkExportConcurrency(user.id);
+    if (!concurrency.allowed) {
+      return res.status(429).json({
+        error: CONCURRENCY_MESSAGE,
+        active: concurrency.active,
+        allowed: concurrency.limit,
+        retryable: true,
+      });
     }
 
     // Measure the source before resolving a billing path, so an export that is

@@ -44,25 +44,32 @@ export async function checkStorageQuota(
   userId: string,
   incomingBytes: number,
 ): Promise<StorageQuotaVerdict> {
-  const { data, error } = await supabase.rpc('user_storage_bytes', { p_user_id: userId });
-
-  if (error) {
-    console.error('[storage-quota] Could not read usage:', error);
-    return {
-      allowed: false,
-      usedBytes: MAX_STORAGE_BYTES_PER_USER,
-      limitBytes: MAX_STORAGE_BYTES_PER_USER,
-      incomingBytes,
-    };
-  }
-
-  const usedBytes = Number(data ?? 0);
-  const safeUsed = Number.isFinite(usedBytes) && usedBytes > 0 ? usedBytes : 0;
-
-  return {
-    allowed: safeUsed + incomingBytes <= MAX_STORAGE_BYTES_PER_USER,
-    usedBytes: safeUsed,
+  const denied: StorageQuotaVerdict = {
+    allowed: false,
+    usedBytes: MAX_STORAGE_BYTES_PER_USER,
     limitBytes: MAX_STORAGE_BYTES_PER_USER,
     incomingBytes,
   };
+
+  try {
+    const { data, error } = await supabase.rpc('user_storage_bytes', { p_user_id: userId });
+
+    if (error) {
+      console.error('[storage-quota] Could not read usage:', error);
+      return denied;
+    }
+
+    const usedBytes = Number(data ?? 0);
+    const safeUsed = Number.isFinite(usedBytes) && usedBytes > 0 ? usedBytes : 0;
+
+    return {
+      allowed: safeUsed + incomingBytes <= MAX_STORAGE_BYTES_PER_USER,
+      usedBytes: safeUsed,
+      limitBytes: MAX_STORAGE_BYTES_PER_USER,
+      incomingBytes,
+    };
+  } catch (err) {
+    console.error('[storage-quota] Usage read threw:', err);
+    return denied;
+  }
 }
