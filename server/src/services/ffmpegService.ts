@@ -2,6 +2,8 @@ import { spawn } from 'child_process';
 import { unlinkSync, existsSync } from 'fs';
 import path from 'path';
 import { StorageService } from './storageService';
+import { guardMediaProcess } from '../lib/mediaProcess';
+import { PROBE_TIMEOUT_MS, renderTimeoutMs } from '../config/mediaLimits';
 
 interface ProcessingFormat {
   width: number;
@@ -62,6 +64,8 @@ export class FFmpegService {
         'json',
         inputPath,
       ]);
+
+      guardMediaProcess(ffprobe, { label: 'ffprobe', timeoutMs: PROBE_TIMEOUT_MS }, reject);
 
       let output = '';
       ffprobe.stdout.on('data', (data) => {
@@ -185,6 +189,12 @@ export class FFmpegService {
 
     return new Promise((resolve, reject) => {
       const ffmpeg = spawn('ffmpeg', args);
+
+      guardMediaProcess(
+        ffmpeg,
+        { label: `ffmpeg render for ${platform}`, timeoutMs: renderTimeoutMs(metadata.duration) },
+        reject,
+      );
 
       // Collect error output
       let errorOutput = '';
@@ -328,9 +338,10 @@ export class FFmpegService {
   /**
    * Run a single FFmpeg command and return a promise.
    */
-  private static runFfmpeg(args: string[]): Promise<void> {
+  private static runFfmpeg(args: string[], timeoutMs: number): Promise<void> {
     return new Promise((resolve, reject) => {
       const proc = spawn('ffmpeg', args);
+      guardMediaProcess(proc, { label: 'ffmpeg', timeoutMs }, reject);
       let errorOutput = '';
       proc.stderr.on('data', (data) => {
         errorOutput += data.toString();
@@ -366,6 +377,7 @@ export class FFmpegService {
     const metadata = await this.getVideoMetadata(localInput);
     const segments = this.buildSegments(focusPoints, metadata.duration);
     const quality = QUALITY_PRESETS[options.quality];
+    const segmentTimeoutMs = renderTimeoutMs(metadata.duration);
 
     // Single segment: process directly
     if (segments.length <= 1) {
@@ -391,7 +403,7 @@ export class FFmpegService {
         outputPath,
       ];
 
-      await this.runFfmpeg(args);
+      await this.runFfmpeg(args, segmentTimeoutMs);
 
       // Clean up temp input
       if (isUrl && existsSync(localInput)) unlinkSync(localInput);
@@ -433,7 +445,7 @@ export class FFmpegService {
           segPath,
         ];
 
-        await this.runFfmpeg(args);
+        await this.runFfmpeg(args, segmentTimeoutMs);
       }
 
       // Write concat list file
@@ -450,7 +462,7 @@ export class FFmpegService {
         outputPath,
       ];
 
-      await this.runFfmpeg(concatArgs);
+      await this.runFfmpeg(concatArgs, segmentTimeoutMs);
 
       return outputPath;
     } finally {
