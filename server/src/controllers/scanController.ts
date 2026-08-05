@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '../config/supabase';
 import { runScan } from '../services/scanService';
-import { StorageService } from '../services/storageService';
+import { StorageService, PIPELINE_SIGNED_URL_TTL_SECONDS } from '../services/storageService';
 
 export async function startScan(req: Request, res: Response): Promise<void> {
   try {
@@ -64,7 +64,10 @@ export async function startScan(req: Request, res: Response): Promise<void> {
     // Kick off scan asynchronously. The bucket is private (F-012), so hand
     // the scanner a signed URL — the stored original_url is only an identifier.
     const scanSourceUrl =
-      (await StorageService.getSignedUrl(video.original_url)) ?? video.original_url;
+      (await StorageService.getSignedUrl(
+        video.original_url,
+        PIPELINE_SIGNED_URL_TTL_SECONDS,
+      )) ?? video.original_url;
     runScan(scanJob.id, videoId, scanSourceUrl, scanOptions).catch((err) => {
       console.error(`Background scan ${scanJob.id} error:`, err);
     });

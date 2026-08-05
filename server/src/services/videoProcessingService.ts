@@ -2,7 +2,7 @@ import { supabase } from '../config/supabase';
 import path from 'path';
 import fs from 'fs';
 import { analyzeVideo } from './videoAnalysisService';
-import { StorageService } from './storageService';
+import { StorageService, PIPELINE_SIGNED_URL_TTL_SECONDS } from './storageService';
 import { OUTPUT_FORMATS, OutputFormat } from '../config/outputFormats';
 import { FFmpegService } from './ffmpegService';
 import { defaultConfig, VideoProcessingConfig } from '../config/videoProcessing';
@@ -194,9 +194,14 @@ class BasicVideoProcessor implements VideoProcessor {
       }
 
       // The bucket is private (F-012): mint a signed URL for FFmpeg/analysis
-      // reads. The stored original_url is only a path identifier.
+      // reads. The stored original_url is only a path identifier. This one
+      // signature has to survive every platform render in the run, so it uses
+      // the pipeline TTL rather than the short browser-facing default.
       const sourceUrl =
-        (await StorageService.getSignedUrl(video.original_url)) ?? video.original_url;
+        (await StorageService.getSignedUrl(
+          video.original_url,
+          PIPELINE_SIGNED_URL_TTL_SECONDS,
+        )) ?? video.original_url;
 
       // Analyze video to detect subjects and important regions
       const analysisResult = await this.analyzer.analyze(sourceUrl);

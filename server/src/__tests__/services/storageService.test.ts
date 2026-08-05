@@ -38,7 +38,7 @@ jest.mock('fs', () => {
   };
 });
 
-import { StorageService } from '../../services/storageService';
+import { StorageService, PIPELINE_SIGNED_URL_TTL_SECONDS } from '../../services/storageService';
 
 describe('StorageService', () => {
   beforeEach(() => {
@@ -179,6 +179,28 @@ describe('StorageService', () => {
       const url = await StorageService.getSignedUrl(PUB);
       expect(url).toContain('/object/sign/');
       expect(url).toContain('token=');
+    });
+
+    /**
+     * F-065: the TTL was 7 days for everything, including the URLs handed to a
+     * browser. A leaked playback link gave a week of anonymous access to
+     * unreleased client creative.
+     */
+    it('signs browser-facing URLs for an hour by default', async () => {
+      const { supabase } = require('../../config/supabase');
+      await StorageService.getSignedUrl(PUB);
+
+      const [, expiresIn] = supabase.storage.from.mock.results
+        .at(-1).value.createSignedUrl.mock.calls[0];
+      expect(expiresIn).toBe(60 * 60);
+      expect(expiresIn).toBeLessThan(7 * 24 * 60 * 60);
+    });
+
+    it('gives pipeline reads a TTL that outlives a full multi-platform export', async () => {
+      // One signature covers every render in a run: up to 8 platforms at up to
+      // an hour each, so it must clear roughly eight hours.
+      expect(PIPELINE_SIGNED_URL_TTL_SECONDS).toBeGreaterThanOrEqual(8 * 60 * 60);
+      expect(PIPELINE_SIGNED_URL_TTL_SECONDS).toBeLessThan(24 * 60 * 60);
     });
 
     it('signVideoRecord signs original_url and every platform output URL', async () => {
