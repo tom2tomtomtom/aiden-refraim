@@ -7,7 +7,6 @@ import { DatabaseService } from '../services/databaseService';
 import { supabase } from '../config/supabase';
 import {
   checkTokens,
-  compensateTokens,
   deductTokens,
   recordCostEvent,
 } from '../lib/gateway-tokens';
@@ -16,6 +15,17 @@ import {
   recoverPlanQuotaExport,
   reserveExportForJob,
 } from '../lib/quota';
+import { initialLeaseExpiry } from '../lib/exportLease';
+import {
+  FAILED_EXPORT_MESSAGE,
+  RECONCILING_MESSAGE,
+  RETRYABLE_FAILURE_MESSAGE,
+  getActiveJobId,
+  hasSuccessfulOutput,
+  isTerminalJobStatus,
+  reconcileGatewayCharge,
+  recoverExportState,
+} from '../lib/exportRecovery';
 import { resolveBillingPath } from '../lib/billing-path';
 import { fileHasVideoSignature } from '../lib/videoSignature';
 import { FFmpegService } from '../services/ffmpegService';
@@ -34,136 +44,6 @@ const VALID_PLATFORMS = [
   'youtube-main',
   'youtube-shorts',
 ] as const;
-
-const RETRYABLE_FAILURE_MESSAGE =
-  'This export did not complete. You were not charged. Please retry.';
-const FAILED_EXPORT_MESSAGE =
-  'This export did not complete. Please retry.';
-const RECONCILING_MESSAGE =
-  'We are restoring your token balance. Please wait before retrying.';
-const GATEWAY_SETTLEMENT_STALE_MS = 60_000;
-const PROCESSING_JOB_STALE_MS = 30 * 60_000;
-const MISSING_JOB_CLAIM_STALE_MS = 5 * 60_000;
-
-function getActiveJobId(video: { processing_metadata?: unknown } | null): string | null {
-  if (!video?.processing_metadata || typeof video.processing_metadata !== 'object') return null;
-  const value = (video.processing_metadata as { active_job_id?: unknown }).active_job_id;
-  return typeof value === 'string' ? value : null;
-}
-
-function isTimestampStale(
-  updatedAt: string | undefined,
-  createdAt: string | undefined,
-  thresholdMs: number,
-): boolean {
-  const timestamp = Date.parse(updatedAt ?? createdAt ?? '');
-  return !Number.isFinite(timestamp) || Date.now() - timestamp >= thresholdMs;
-}
-
-function hasSuccessfulOutput(video: { platform_outputs?: unknown } | null): boolean {
-  if (!video?.platform_outputs || typeof video.platform_outputs !== 'object') return false;
-  return Object.values(video.platform_outputs as Record<string, { status?: string }>)
-    .some(output => output?.status === 'complete');
-}
-
-function isTerminalJobStatus(status: unknown): boolean {
-  const normalized = String(status ?? '').toLowerCase();
-  return normalized === 'completed'
-    || normalized === 'complete'
-    || normalized === 'failed'
-    || normalized === 'failed_compensated'
-    || normalized === 'failed_allowance_refunded'
-    || normalized === 'error';
-}
-
-function isPlanQuotaRecoveryStatus(status: unknown): boolean {
-  const normalized = String(status ?? '').toLowerCase();
-  return normalized === 'reserving_plan_quota'
-    || normalized === 'processing_plan_quota'
-    || normalized === 'publishing_plan_quota'
-    || normalized === 'publishing_no_charge_plan_quota';
-}
-
-function isPlanQuotaRecoveryReady(job: {
-  status?: unknown;
-  updated_at?: string;
-  created_at?: string;
-}): boolean {
-  return String(job.status ?? '').toLowerCase() === 'publishing_no_charge_plan_quota'
-    || isTimestampStale(job.updated_at, job.created_at, PROCESSING_JOB_STALE_MS);
-}
-
-function isLegacyAmbiguousQuotaStatus(status: unknown): boolean {
-  const normalized = String(status ?? '').toLowerCase();
-  return normalized === 'pending'
-    || normalized === 'running'
-    || normalized === 'processing'
-    || normalized === 'publishing_no_charge';
-}
-
-function isStaleNonSettlementJob(job: {
-  status?: unknown;
-  updated_at?: string;
-  created_at?: string;
-}): boolean {
-  if (isTerminalJobStatus(job.status) || isStaleGatewaySettlement(job)) return false;
-  return isTimestampStale(job.updated_at, job.created_at, PROCESSING_JOB_STALE_MS);
-}
-
-function isStaleGatewaySettlement(job: {
-  status?: unknown;
-  updated_at?: string;
-  created_at?: string;
-}): boolean {
-  const status = String(job.status ?? '').toLowerCase();
-  if (![
-    'settling_gateway_tokens',
-    'publishing_gateway_tokens',
-    'compensation_pending_gateway_tokens',
-  ].includes(status) && !status.startsWith('reconciling_gateway_tokens:')) {
-    return false;
-  }
-
-  const timestamp = Date.parse(job.updated_at ?? job.created_at ?? '');
-  return !Number.isFinite(timestamp)
-    || Date.now() - timestamp >= GATEWAY_SETTLEMENT_STALE_MS;
-}
-
-async function reconcileGatewayCharge(
-  userId: string,
-  requestId: string,
-  knownTransactionId?: string,
-) {
-  let transactionId = knownTransactionId;
-  if (!transactionId) {
-    // Replaying the request id is the only safe way to resolve an ambiguous
-    // network outcome. Gateway's unique (user, request_id) key guarantees
-    // this creates at most one deduction or returns the existing one.
-    const deduction = await deductTokens(
-      userId,
-      'refraim',
-      'video_export',
-      requestId,
-    );
-    if (!deduction.success) {
-      if (deduction.error === 'insufficient_tokens') {
-        return { success: true, noDeduction: true };
-      }
-      return { success: false, error: deduction.error };
-    }
-    transactionId = deduction.transactionId;
-  }
-
-  return transactionId
-    ? compensateTokens(
-      userId,
-      'refraim',
-      'video_export',
-      requestId,
-      transactionId,
-    )
-    : compensateTokens(userId, 'refraim', 'video_export', requestId);
-}
 
 function sanitizePlatforms(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
@@ -382,245 +262,23 @@ export const getVideoStatus = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    // The active job id lives on the video claim. Prefer it over "latest" so
-    // an orphan job created before a lost claim cannot impersonate the worker
-    // that actually owns this video.
-    const activeJobId = getActiveJobId(video);
-    let job = activeJobId
-      ? await DatabaseService.getProcessingJob(activeJobId)
-      : await DatabaseService.getLatestProcessingJob(id, user.id);
-
-    if (
-      activeJobId
-      && !job
-      && String(video.status).toLowerCase() === 'processing'
-      && isTimestampStale(video.updated_at, video.created_at, MISSING_JOB_CLAIM_STALE_MS)
-    ) {
-      const recovery = await recoverPlanQuotaExport(
-        user.id,
-        id,
-        activeJobId,
-        true,
-      );
-      if (recovery.recovered) {
-        video = await DatabaseService.getVideo(id);
-        job = await DatabaseService.getProcessingJob(activeJobId);
-        if (!video) {
-          return res.status(404).json({ error: 'Video not found' });
-        }
-      }
-    } else if (job && hasSuccessfulOutput(video) && !isTerminalJobStatus(job.status)) {
-      const jobId = job.id;
-      const recoveredStatus = String(video.status).toLowerCase() === 'failed'
-        ? 'failed'
-        : 'completed';
-      const updatedJob = await DatabaseService.updateProcessingJob(jobId, {
-        status: recoveredStatus,
-        progress: 100,
-        updated_at: new Date().toISOString(),
-      } as any);
-      job = { ...job, ...updatedJob, id: jobId };
-    } else if (
-      job
-      && isPlanQuotaRecoveryStatus(job.status)
-      && isPlanQuotaRecoveryReady(job)
-    ) {
-      const jobId = job.id;
-      const recovery = await recoverPlanQuotaExport(user.id, id, jobId, false);
-      if (recovery.recovered) {
-        video = await DatabaseService.getVideo(id);
-        job = await DatabaseService.getProcessingJob(jobId);
-        if (!video) {
-          return res.status(404).json({ error: 'Video not found' });
-        }
-      }
-    } else if (
-      job
-      && isLegacyAmbiguousQuotaStatus(job.status)
-      && isTimestampStale(job.updated_at, job.created_at, PROCESSING_JOB_STALE_MS)
-    ) {
-      const jobId = job.id;
-      const recovery = await recoverPlanQuotaExport(user.id, id, jobId, true);
-      if (recovery.recovered) {
-        video = await DatabaseService.getVideo(id);
-        job = await DatabaseService.getProcessingJob(jobId);
-        if (!video) {
-          return res.status(404).json({ error: 'Video not found' });
-        }
-      }
-    } else if (job && isStaleGatewaySettlement(job)) {
-      const jobId = job.id;
-      const recoveryStatus = `reconciling_gateway_tokens:${randomUUID()}`;
-      const recoveryJob = await DatabaseService.transitionProcessingJob(
-        jobId,
-        [String(job.status)],
-        {
-          status: recoveryStatus,
-          progress: 99,
-          error: RECONCILING_MESSAGE,
-          updated_at: new Date().toISOString(),
-        } as any,
-      );
-      if (!recoveryJob) {
-        // Another poll or the worker changed phase first. Only that owner may
-        // reconcile; this request reports the newly durable state.
-        job = await DatabaseService.getLatestProcessingJob(id, user.id);
-      } else {
-        job = { ...job, ...recoveryJob, id: jobId };
-        const videoStatus = String(video.status).toLowerCase();
-        const videoAlreadyReleased = !activeJobId
-          && (videoStatus === 'failed' || videoStatus === 'error')
-          && !hasSuccessfulOutput(video);
-
-        if (videoAlreadyReleased) {
-          // Compensation and release may have committed just before the
-          // process died. Gateway reconciliation is idempotent, so finish the
-          // durable job marker without trying to reacquire a cleared fence.
-          const reconciliation = await reconcileGatewayCharge(user.id, jobId);
-          if (!reconciliation.success) {
-            return res.json({
-              status: 'processing',
-              progress: 99,
-              platforms: {},
-              platformOutputs: {},
-              jobId,
-              reconciling: true,
-              error: RECONCILING_MESSAGE,
-            });
-          }
-          const updatedJob = await DatabaseService.updateProcessingJob(jobId, {
-            status: 'failed_compensated',
-            progress: 100,
-            error: RETRYABLE_FAILURE_MESSAGE,
-            updated_at: new Date().toISOString(),
-          } as any);
-          job = { ...job, ...updatedJob, id: jobId };
-        } else {
-          const fenced = await DatabaseService.fenceVideoPublication(id, user.id, jobId);
-          if (!fenced) {
-            // Publication won the row race. Never compensate a run whose output
-            // may already be visible; re-read its durable result instead.
-            video = await DatabaseService.getVideo(id);
-            job = activeJobId
-              ? await DatabaseService.getProcessingJob(jobId)
-              : await DatabaseService.getLatestProcessingJob(id, user.id);
-            if (!video) {
-              return res.status(404).json({ error: 'Video not found' });
-            }
-            if (hasSuccessfulOutput(video) && job && !isTerminalJobStatus(job.status)) {
-              const recoveredStatus = String(video.status).toLowerCase() === 'failed'
-                ? 'failed'
-                : 'completed';
-              const updatedJob = await DatabaseService.updateProcessingJob(jobId, {
-                status: recoveredStatus,
-                progress: 100,
-                error: null,
-                updated_at: new Date().toISOString(),
-              } as any);
-              job = { ...job, ...updatedJob, id: jobId };
-            }
-          } else {
-            const reconciliation = await reconcileGatewayCharge(user.id, jobId);
-            if (!reconciliation.success) {
-              return res.json({
-                status: 'processing',
-                progress: 99,
-                platforms: {},
-                platformOutputs: {},
-                jobId,
-                reconciling: true,
-                error: RECONCILING_MESSAGE,
-              });
-            }
-
-            const released = await DatabaseService.releaseVideoProcessing(
-              id,
-              user.id,
-              jobId,
-              {
-                status: 'failed',
-                platform_outputs: null,
-              } as any,
-            );
-            if (released) {
-              const updatedJob = await DatabaseService.updateProcessingJob(jobId, {
-                status: 'failed_compensated',
-                progress: 100,
-                error: RETRYABLE_FAILURE_MESSAGE,
-                updated_at: new Date().toISOString(),
-              } as any);
-              job = { ...job, ...updatedJob, id: jobId };
-              video.status = 'ERROR';
-              video.platform_outputs = undefined;
-            } else {
-              // A live worker crossed the publication boundary before recovery
-              // won the ownership predicate. Re-read its result.
-              video = await DatabaseService.getVideo(id);
-              job = await DatabaseService.getLatestProcessingJob(id, user.id);
-              if (!video) {
-                return res.status(404).json({ error: 'Video not found' });
-              }
-            }
-          }
-        }
-      }
-    } else if (job && isStaleNonSettlementJob(job)) {
-      const jobId = job.id;
-      const recoveryStatus = `recovering_no_charge:${randomUUID()}`;
-      const recoveryJob = await DatabaseService.transitionProcessingJob(
-        jobId,
-        [String(job.status)],
-        {
-          status: recoveryStatus,
-          progress: 99,
-          error: FAILED_EXPORT_MESSAGE,
-          updated_at: new Date().toISOString(),
-        } as any,
-      );
-      if (recoveryJob) {
-        const videoStatus = String(video.status).toLowerCase();
-        const orphanedBeforeClaim = !activeJobId && videoStatus !== 'processing';
-        if (orphanedBeforeClaim) {
-          const updatedJob = await DatabaseService.updateProcessingJob(jobId, {
-            status: 'failed',
-            progress: 100,
-            error: FAILED_EXPORT_MESSAGE,
-            updated_at: new Date().toISOString(),
-          } as any);
-          job = { ...job, ...updatedJob, id: jobId };
-        } else {
-          const released = await DatabaseService.releaseVideoProcessing(
-            id,
-            user.id,
-            jobId,
-            { status: 'failed', platform_outputs: null } as any,
-          );
-          if (released) {
-            const updatedJob = await DatabaseService.updateProcessingJob(jobId, {
-              status: 'failed',
-              progress: 100,
-              error: FAILED_EXPORT_MESSAGE,
-              updated_at: new Date().toISOString(),
-            } as any);
-            job = { ...job, ...updatedJob, id: jobId };
-            video.status = 'ERROR';
-            video.platform_outputs = undefined;
-          } else {
-            video = await DatabaseService.getVideo(id);
-            job = activeJobId
-              ? await DatabaseService.getProcessingJob(jobId)
-              : await DatabaseService.getLatestProcessingJob(id, user.id);
-            if (!video) {
-              return res.status(404).json({ error: 'Video not found' });
-            }
-          }
-        }
-      } else {
-        job = activeJobId
-          ? await DatabaseService.getProcessingJob(jobId)
-          : await DatabaseService.getLatestProcessingJob(id, user.id);
-      }
+    const recovery = await recoverExportState(user.id, id, video);
+    if (recovery.outcome === 'video-missing') {
+      return res.status(404).json({ error: 'Video not found' });
     }
+    if (recovery.outcome === 'reconciling') {
+      return res.json({
+        status: 'processing',
+        progress: 99,
+        platforms: {},
+        platformOutputs: {},
+        jobId: recovery.jobId,
+        reconciling: true,
+        error: RECONCILING_MESSAGE,
+      });
+    }
+    const { job, activeJobId } = recovery;
+    video = recovery.video;
 
     const platformOutputs = video.platform_outputs || {};
     const jobStatus = String(job?.status ?? '').toLowerCase();
@@ -784,6 +442,9 @@ export const processVideo = async (req: Request, res: Response) => {
       progress: 0,
       error: null,
       user_id: user.id,
+      // Lease from creation, not from first render, so a crash during setup
+      // is reaped on the same schedule as a crash mid-encode.
+      lease_expires_at: initialLeaseExpiry(),
     } as any);
 
     let claimed: boolean;
@@ -888,6 +549,7 @@ export const processVideo = async (req: Request, res: Response) => {
     const processingStartedAt = Date.now();
     let deductionTransactionId: string | undefined;
     let gatewaySettlementStarted = false;
+
 
     // Start processing asynchronously; deduct tokens only when at least one
     // output succeeds, and before that output becomes visible to the client.
@@ -1191,7 +853,7 @@ export const deleteVideo = async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
-    const video = await DatabaseService.getVideo(id);
+    let video = await DatabaseService.getVideo(id);
 
     if (!video) {
       return res.status(404).json({ error: 'Video not found' });
@@ -1201,19 +863,33 @@ export const deleteVideo = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const latestJob = await DatabaseService.getLatestProcessingJob(id, user.id);
-    const videoStatus = String(video.status).toLowerCase();
-    const activeJobId = (video.processing_metadata as { active_job_id?: unknown } | null)
-      ?.active_job_id;
-    if (
-      videoStatus === 'processing'
-      || typeof activeJobId === 'string'
-      || (latestJob && !isTerminalJobStatus(latestJob.status))
-    ) {
-      return res.status(409).json({
-        error: 'This video is still processing or restoring billing. Wait for it to finish before deleting.',
-        retryable: true,
-      });
+    const stillClaimed = (
+      current: typeof video,
+      job: { status?: unknown } | null,
+    ): boolean => String(current?.status).toLowerCase() === 'processing'
+      || typeof getActiveJobId(current) === 'string'
+      || Boolean(job && !isTerminalJobStatus(job.status));
+
+    let latestJob = await DatabaseService.getLatestProcessingJob(id, user.id);
+    if (stillClaimed(video, latestJob)) {
+      // Refusing outright is what left users with an undeletable video after
+      // a worker died. Converge the claim first; only a genuinely live run
+      // should still block the delete.
+      const recovery = await recoverExportState(user.id, id, video);
+      if (recovery.outcome === 'video-missing') {
+        return res.status(404).json({ error: 'Video not found' });
+      }
+      if (recovery.outcome === 'resolved') {
+        video = recovery.video;
+        latestJob = recovery.job ?? latestJob;
+      }
+
+      if (recovery.outcome === 'reconciling' || stillClaimed(video, latestJob)) {
+        return res.status(409).json({
+          error: 'This video is still processing or restoring billing. Wait for it to finish before deleting.',
+          retryable: true,
+        });
+      }
     }
 
     // Win the final database race before removing storage. A processing claim

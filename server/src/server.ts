@@ -7,6 +7,7 @@ import './instrument';
 import app from './app';
 import { InitializationService } from './services/initializationService';
 import { validateSupabaseEnvOrExit } from './lib/supabase-env';
+import { startExportReaper } from './lib/exportReaper';
 
 // Fail loud at startup if SUPABASE_URL is missing or points at the wrong
 // project. Must run before any Supabase client is constructed.
@@ -28,6 +29,8 @@ async function startServer() {
       console.log(`Server running on port ${port}`);
       console.log(`Environment: ${process.env.NODE_ENV}`);
     });
+
+    startExportReaper();
   } catch (error) {
     console.error('Failed to start server:', error);
     process.exit(1);

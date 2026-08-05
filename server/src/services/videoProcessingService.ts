@@ -6,7 +6,8 @@ import { StorageService } from './storageService';
 import { OUTPUT_FORMATS, OutputFormat } from '../config/outputFormats';
 import { FFmpegService, FocusPoint } from './ffmpegService';
 import { defaultConfig, VideoProcessingConfig } from '../config/videoProcessing';
-import { findSourceLimitViolation } from '../config/mediaLimits';
+import { findSourceLimitViolation, renderTimeoutMs } from '../config/mediaLimits';
+import { startExportHeartbeat } from '../lib/exportLease';
 
 interface Video {
   id: string;
@@ -242,6 +243,14 @@ class BasicVideoProcessor implements VideoProcessor {
         const format = OUTPUT_FORMATS[platform];
         if (!format) continue;
 
+        // A render writes no progress while it runs, so this is the only
+        // window in which "stuck" and "working" look identical from outside.
+        // Hold the lease across exactly that window and no longer.
+        const stopHeartbeat = startExportHeartbeat(
+          context.jobId,
+          video.user_id,
+          renderTimeoutMs(analysisResult.metadata?.duration),
+        );
         try {
           // Process video according to platform requirements
           const outputPath = path.join(this.config.processingOptions.tempDir, `${video.id}-${platform}.mp4`);
@@ -292,6 +301,8 @@ class BasicVideoProcessor implements VideoProcessor {
           await this.updateVideoStatus(
             video.id, processingStatus, undefined, progress, context.jobId, [processingStatus],
           );
+        } finally {
+          stopHeartbeat();
         }
       }
 
